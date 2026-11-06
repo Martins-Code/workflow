@@ -1,6 +1,6 @@
 # 06 — Testing Strategy
 
-**Status:** Draft for review · **Date:** 2026-11-05
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-05
 
 ---
 
@@ -74,6 +74,11 @@ e2e/                                  Playwright flows
 | Reset token reused or expired | Rejected |
 | Forgot password for an unknown email | Same response as a known email |
 | Unverified user creates a workspace | 403 `email_not_verified` |
+| Session cookie attributes | Host-only in the demo configuration; `HttpOnly`, `Secure` and `SameSite=Lax` |
+| Same-origin GET with a `Referer` but no `Origin` | Authenticated through the session |
+| Request with an untrusted `Host` header | Rejected |
+| Demo account changes password or email, or sends an invitation | 403 `demo_restricted` |
+| Registration while the email fallback is active | 403 `registration_disabled` |
 | Tampered or expired verification link | Rejected |
 
 ### Invitations
@@ -108,6 +113,7 @@ For each write endpoint, a dataset covering missing required fields, wrong types
 - Changes and activity records commit or roll back together.
 - Notifications are sent only to the right people, and not to the actor.
 - Members can't reach a Completed task through any route except those allowed.
+- The demo reset command refuses to run unless demo mode is enabled, and rebuilds a working demo from empty when it is.
 
 ### Performance guard
 
@@ -204,6 +210,8 @@ dataset('project_update', [
 | Role-based display | Controls follow the `can` object, for example no "Archive" when `archive` is false |
 | Routing | Guest redirected to login with a return URL; an unknown workspace shows not-found |
 | Session errors | 401 redirects; 419 refreshes the CSRF cookie and retries once |
+| Waking demo | A slow or non-JSON response shows the "waking up" message and retries |
+| Demo notice | The nightly-reset banner appears in demo mode |
 | Workspace cache | Switching workspace never shows the previous workspace's data, even briefly. Logout clears the cache |
 | Kanban | Failed move reverts with a message; keyboard alternative changes status |
 | XSS | A comment containing `<img onerror=...>` renders as text |
@@ -213,7 +221,7 @@ dataset('project_update', [
 
 ## 7. End-to-end smoke flows
 
-Against a production-like build on separate origins, with real cookies.
+Against the same single-origin container image used for the demo, with real cookies.
 
 1. **Onboarding:** register, verify, create a workspace, invite a colleague, accept the invitation from a second browser context.
 2. **Delivery:** the PM creates a project and task and assigns it; the contributor moves it to In Review and sees the notification; the PM completes it; the dashboard updates.
@@ -229,9 +237,22 @@ GitHub Actions runs on every pull request to `main`.
 
 | Job | Steps |
 |---|---|
-| Backend | PHP 8.3, MySQL 8.4 service, `composer audit`, Pint check, migrate from empty, full test suite |
+| Backend | PHP 8.3, MySQL 8.4 service with `sql_require_primary_key` on, `composer audit`, Pint check, migrate from empty, full test suite |
 | Frontend | Node 22, `npm audit --audit-level=high`, ESLint, Vitest, production build |
+| Container | Build the demo image, check `/up` responds, check that a client-side route serves the SPA |
 | End to end | Playwright smoke flows on pull requests to `main` |
+
+### Live demo checks
+
+Automated CI can't prove the behaviour of the real hosting. These run manually against the live URL after the first deployment and before release, using the [Phase 2 hosting validation list](02-system-architecture.md#phase-2-hosting-validation):
+
+- Real cookie login, including the cookie attributes in browser developer tools.
+- A write without a CSRF token is rejected.
+- Rate limits use the real client IP, and a spoofed `X-Forwarded-For` has no effect.
+- Tenant isolation constraint tests pass against the hosted database.
+- Waking from sleep works, in a browser, with an open tab.
+- The email flow works, or the documented fallback is active.
+- The nightly reset ran and the demo remains usable.
 
 ---
 
@@ -253,6 +274,7 @@ GitHub Actions runs on every pull request to `main`.
 - There are no `skip` or `todo` markers in the `Tenancy` or `Authorization` folders.
 - Every row in the permissions matrix has a matching test.
 - No high or critical unresolved dependency vulnerabilities.
+- All live demo checks have passed on the deployed release.
 - Backend coverage is at least 80%, with the tenancy module and policies at 100% of branches. **Coverage is a floor, not evidence of quality.** The matrix and isolation suites are what demonstrate the rules.
 
 Flaky security tests are treated as defects, not retried until they pass.

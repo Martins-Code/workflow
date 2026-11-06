@@ -1,6 +1,6 @@
 # 04 — Permissions Matrix
 
-**Status:** Draft for review · **Date:** 2026-11-05 · **Depends on:** decisions D1, D2, D3, D9, D11
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Depends on:** confirmed decisions D1, D2, D3, D9, D11
 
 ---
 
@@ -96,6 +96,10 @@ The columns show **effective access** from section 1. Workspace Administrators u
 ### Archived projects
 
 Archived projects are read-only for **everyone, including Administrators**. The only write allowed is unarchiving. Other writes return 409 with code `project_archived`. This is a state rule, not a permission, which is why it can't be bypassed by a blanket admin override.
+
+### Demo accounts
+
+Seeded demo accounts follow the same matrix for their role, plus these restrictions in every workspace: they cannot change their email or password, and cannot send or resend invitations. These attempts return 403 with code `demo_restricted`. Demo restrictions only ever remove abilities, and they never bypass tenant checks.
 
 ---
 

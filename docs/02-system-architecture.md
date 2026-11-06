@@ -1,40 +1,42 @@
 # 02 — System Architecture
 
-**Status:** Draft for review · **Date:** 2026-11-05
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-05
 
-Decision references such as **D5** point to [01 — Product Requirements](01-product-requirements.md#2-decisions-that-need-your-confirmation).
+Decision references such as **D5** point to [01 — Product Requirements](01-product-requirements.md#2-confirmed-decisions).
 
 ---
 
 ## 1. System overview
 
-WorkFlow is two independently deployed applications on one hosting provider: a React single-page app (SPA) served as static files, and a Laravel REST API backed by MySQL.
+WorkFlow is two separate applications: a React single-page app (SPA) and a Laravel REST API backed by MySQL. They have separate code, dependencies, configuration, tests and CI jobs, and they communicate only through the HTTP API. For the free portfolio demo, their build outputs are packaged into **one container on one origin**, so the browser sees a single site. This is the D7 demo deployment, and section 10 explains why.
 
 ```mermaid
 flowchart TB
     Browser["Browser<br/>React SPA"]
 
-    subgraph Host["Hosting provider, single Linux server"]
-        Web["Nginx<br/>TLS termination"]
-        Static["Static frontend build<br/>app.example.com"]
-        API["Laravel API, PHP-FPM<br/>api.example.com"]
-        Worker["Queue worker<br/>managed by Supervisor"]
-        Cron["Scheduler<br/>cron, every minute"]
-        DB[("MySQL 8.4<br/>app data, sessions, queue, cache")]
+    subgraph Render["Render free web service: https://service.onrender.com"]
+        Edge["Render edge<br/>HTTPS termination"]
+        subgraph Container["One Docker container, run by Supervisor"]
+            Web["Nginx<br/>routes by path"]
+            Static["React build<br/>all other paths"]
+            API["Laravel API, PHP-FPM<br/>/api and /sanctum"]
+            Worker["Queue worker"]
+        end
     end
 
-    Mail["Transactional email provider"]
-    Backup["Off-server encrypted backups"]
+    DB[("Aiven free MySQL 8.4<br/>app data, sessions, queue, cache")]
+    Mail["Email HTTP API"]
+    Actions["GitHub Actions<br/>CI, migrations, nightly reset"]
 
-    Browser -->|"HTTPS: page and assets"| Web
-    Browser -->|"HTTPS: JSON + session cookie"| Web
+    Browser -->|"HTTPS: pages and JSON, same origin"| Edge
+    Edge --> Web
     Web --> Static
     Web --> API
-    API --> DB
-    Worker --> DB
-    Cron --> DB
-    Worker --> Mail
-    DB -.->|"nightly dump"| Backup
+    API -->|"TLS"| DB
+    Worker -->|"TLS"| DB
+    Worker -->|"HTTPS"| Mail
+    Actions -->|"TLS: migrate, reset"| DB
+    Actions -.->|"deploy"| Render
 ```
 
 ### Versions
@@ -43,7 +45,7 @@ flowchart TB
 |---|---|---|
 | Laravel | 13 | Latest major confirmed. Security fixes until Q1 2028. Check for a newer release when scaffolding in Phase 2 |
 | PHP | 8.3 | Laravel 13's minimum. Already installed in your Laragon |
-| MySQL | 8.4 LTS | Already installed locally (8.4.3). **MySQL 8.0 reached end of life in April 2026, so avoid hosts offering only 8.0** |
+| MySQL | 8.4 LTS | Already installed locally (8.4.3). Aiven creates new services on 8.4. **Avoid hosts offering only 8.0, which is past end of life** |
 | Node | 22 | Already installed. Used only to build the frontend |
 
 ---
@@ -70,7 +72,9 @@ Your proposal is the right choice for this project. Its weakness is that **a sin
 
 Sanctum supports both. Bearer tokens must be stored where JavaScript can read them, normally `localStorage`, so any XSS bug can steal them. Sanctum's SPA mode uses Laravel's normal session in an `HttpOnly` cookie that JavaScript cannot read.
 
-**What this costs:** the two apps must share a registrable domain, CSRF protection is mandatory, and CORS needs exact configuration (Risk R1). Public API tokens can be added later if third-party integrations are ever needed.
+**What this costs:** the two apps must share a registrable domain, which the free demo achieves by sharing one origin (Risk R1). CSRF protection is mandatory. Public API tokens can be added later if third-party integrations are ever needed.
+
+**This decision doesn't change for hosting convenience.** Free hosting is chosen to fit this authentication design, not the other way round.
 
 ### ADR-03: Workspace identified in the URL path (D5)
 
@@ -107,9 +111,14 @@ Notification counts poll every 60 seconds, and boards refetch on window focus. W
 workflow/
 ├── backend/        Laravel API
 ├── frontend/       React SPA
+├── deploy/         Dockerfile and Nginx and Supervisor configuration
 ├── docs/           These documents
 └── .github/        CI workflows, using path filters so each app has its own job
 ```
+
+### ADR-09: Portfolio-first hosting on a single origin (D7)
+
+One Docker web service serves both applications from a free platform URL, with MySQL hosted separately. Sanctum cookie authentication and all tenant safeguards stay exactly as designed. See section 10 for the evaluation, limitations and upgrade path.
 
 ### Not recommended: changing the approved stack
 
@@ -294,7 +303,9 @@ frontend/src/
 
 ### Key frontend rules
 
-- **Authentication:** `/sanctum/csrf-cookie`, then login, then fetch `/me`. The Axios client must set `withCredentials: true` and `withXSRFToken: true`. Without the second setting, Axios will not send the CSRF header across subdomains, and every write fails with 419.
+- **Authentication:** `/sanctum/csrf-cookie`, then login, then fetch `/me`. The Axios client uses a relative base URL (`/api/v1`) and sets `withCredentials: true` and `withXSRFToken: true`. On one origin those two settings aren't strictly needed, but keeping them means a later split onto subdomains won't break CSRF.
+- **Local development:** the Vite dev server proxies `/api` and `/sanctum` to Laravel, so local development is same-origin, like the demo.
+- **Waking up:** a sleeping service can return a slow response or a non-JSON loading page. The API client treats that as "waking up", shows a message, and retries, rather than showing a failure.
 - **Protected routes:** `RequireAuth` wraps app routes, and `RequireWorkspace` loads the workspace from the slug and shows "not found" on a 404. These control user experience only. They are not security controls.
 - **Workspace state:** `slug` always comes from the URL. Every workspace query key starts with it, for example `['w', slug, 'projects']`, so data **can't appear in the wrong workspace from the cache**. Logout clears the whole cache.
 - **Role-based interface:** the frontend does not reimplement permission rules. API resources include a `can` object, such as `{ "update": true, "archive": false }`, generated from the same policies the server enforces. The UI hides or shows actions using `can`, so rules cannot drift apart.
@@ -307,21 +318,32 @@ frontend/src/
 
 ## 6. Authentication and cookie setup
 
-| Setting | Production value | Purpose |
-|---|---|---|
-| `SESSION_DRIVER` | `database` | Allows sessions to be revoked |
-| `SESSION_DOMAIN` | `.example.com` | Shares the cookie with the API, and the readable XSRF cookie with the SPA |
-| `SESSION_SECURE_COOKIE` | `true` | HTTPS only |
-| `SESSION_HTTP_ONLY` | `true` | JavaScript can't read the session cookie |
-| `SESSION_SAME_SITE` | `lax` | Blocks cross-site POST requests from carrying the cookie |
-| `SANCTUM_STATEFUL_DOMAINS` | `app.example.com` | Treats requests from the SPA as session-authenticated |
-| CORS `allowed_origins` | `https://app.example.com` | Exact origin. **Never `*` with credentials** |
-| CORS `supports_credentials` | `true` | Allows cookies on cross-origin requests |
+All values come from environment variables, so changing profile doesn't change application code.
+
+| Setting | Demo: one origin | Later: `app.` and `api.` on a custom domain | Purpose |
+|---|---|---|---|
+| `SESSION_DRIVER` | `database` | `database` | Allows sessions to be revoked |
+| `SESSION_DOMAIN` | Empty (host-only) | `.example.com` | Which hosts receive the cookies |
+| `SESSION_SECURE_COOKIE` | `true` | `true` | HTTPS only |
+| `SESSION_HTTP_ONLY` | `true` | `true` | JavaScript can't read the session cookie |
+| `SESSION_SAME_SITE` | `lax` | `lax` | Blocks cross-site POST requests from carrying the cookie |
+| `SANCTUM_STATEFUL_DOMAINS` | `service.onrender.com` | `app.example.com` | Treats requests from the SPA as session-authenticated |
+| `VITE_API_BASE_URL` | `/api/v1` | `https://api.example.com/api/v1` | Where the SPA sends requests. Public, not a secret |
+| CORS `allowed_origins` | None needed | `https://app.example.com` | Exact origin. **Never `*` with credentials** |
+| CORS `supports_credentials` | Not used | `true` | Allows cookies on cross-origin requests |
+
+**Other required settings**
+
+- **Trusted proxies:** Render terminates HTTPS, so Laravel must trust its forwarded headers to recognise HTTPS and set secure cookies. Trusting all proxies with `*` is the usual option on a cloud platform, but it also means forwarded client IP values need checking. Phase 2 validation confirms the IP Laravel sees is correct and can't be spoofed, because rate limits use it.
+- **Trusted hosts:** Laravel responds to any `Host` header by default, so `trustHosts` restricts it to the demo's URL.
+- **`Referrer-Policy: same-origin`:** Sanctum identifies first-party requests using the `Origin` or `Referer` header, and a same-origin GET has no `Origin`. **Setting `no-referrer` would break session authentication on those requests.**
 
 **Concepts worth understanding**
 
+- **Origin versus site.** An origin is scheme + host + port. A site is broader: roughly the registrable domain. `onrender.com` is on the Public Suffix List, so browsers treat `a.onrender.com` and `b.onrender.com` as *different sites*. That prevents other customers' apps from setting cookies for ours, but also means two separately hosted WorkFlow services could not share a cookie.
+- **Why one origin solves it.** The SPA and API have the same origin, so every API call is first-party. No cross-site cookie rules apply, and the API needs no CORS configuration, which removes a whole class of misconfiguration.
 - **CORS is not access control.** It only tells browsers which sites may read responses. Tools such as `curl` ignore it completely.
-- **`SameSite` is not a complete CSRF defence.** `app.` and `api.` count as the same site, so a compromised sibling subdomain could still send requests. That's why the CSRF token is also required.
+- **`SameSite` is not a complete CSRF defence.** It is an extra layer, and in a later subdomain setup `app.` and `api.` would count as the same site. That's why the CSRF token is always required.
 - **Authentication is not authorisation.** A valid session shows who the user is. Layers 2–6 decide what they may access.
 
 ---
@@ -338,11 +360,11 @@ frontend/src/
 | **SQL injection** | Eloquent and bound parameters. Sort columns come from a whitelist, as bindings can't protect column names. `LIKE` wildcards are escaped in search | Tests with malicious input |
 | **XSS** | React escapes output by default. `dangerouslySetInnerHTML` is banned by a lint rule. Plain text only (D10). Content-Security-Policy on the frontend, no third-party scripts | Lint rule and tests with script payloads |
 | **CSRF** | Sanctum CSRF middleware on stateful requests and `SameSite=Lax` | One real cookie-flow test, since `Sanctum::actingAs` skips CSRF |
-| **Secure cookies** | Section 6, with HSTS at Nginx | Production checklist |
+| **Secure cookies** | Section 6, with an HSTS header from Nginx | Live demo checklist |
 | **Password handling** | Laravel `Hash` (bcrypt or Argon2id). Minimum 10 characters plus a breached-password check. Current password required to change it. Never logged or returned | Feature tests |
 | **Invitation security** | 256-bit random token; **only its SHA-256 hash is stored**; expires in 7 days; single use; revocable; bound to one email; accepted in a transaction | Feature tests |
 | **Rate limiting** | Login 5/min per email + IP. Registration 5/hour per IP. Reset 3/hour per email + IP. Invitations 20/hour per workspace. Workspace creation 5/hour per user. General API 120/min per user | Feature tests |
-| **Sensitive configuration** | `.env` is ignored by Git, and `.env.example` holds names only. **Anything named `VITE_*` is compiled into public JavaScript, so it must never hold a secret.** `APP_DEBUG=false` in production. Least-privilege database user. GitHub secret scanning enabled | CI and checklist |
+| **Sensitive configuration** | `.env` is ignored by Git, and `.env.example` holds names only. **Anything named `VITE_*` is compiled into public JavaScript, so it must never hold a secret.** `APP_DEBUG=false` on any deployment. Secrets stored only in Render and GitHub Actions secret settings. TLS required for database connections. Least-privilege database user where the free plan allows. GitHub secret scanning enabled | CI and checklist |
 | **Dependencies** | `composer audit` and `npm audit` in CI, with Dependabot alerts | CI |
 | **Security headers** | `X-Content-Type-Options`, `Referrer-Policy: same-origin`, CSP, HSTS | Checklist |
 
@@ -356,7 +378,10 @@ Having authentication doesn't make the system secure, and these controls don't e
 - **Invitation links sit in email inboxes** until they expire. Tokens are in the URL fragment to keep them out of server logs, and they work only for the matching account.
 - **Sequential IDs** reveal approximate platform-wide record counts. They grant no access, as checks don't depend on IDs being secret. ULIDs could replace them at the cost of larger indexes.
 - **No platform-wide audit or anomaly detection.**
-- **Single server**, so a server failure means downtime until restore.
+- **One free container**, so failure or a provider restart means downtime, with no availability promise.
+- **The demo database accepts connections from the internet.** Render's free plan has no static IP to allow-list, so protection relies on a strong password and TLS. This is another reason it must hold no real data.
+- **Free-plan providers can change or end their terms**, and offer limited support.
+- **Demo accounts are shared by anyone using them.** They can see and alter each other's demo data until the nightly reset. Isolation between workspaces still applies.
 
 ---
 
@@ -365,14 +390,14 @@ Having authentication doesn't make the system secure, and these controls don't e
 | Area | Approach |
 |---|---|
 | Maintainability | Standard Laravel conventions, Laravel Pint and ESLint in CI, one location for each rule |
-| Scalability | Composite indexes on real query patterns. If needed, move to a separate database server, then add Redis, then add more app servers. All of this is possible because the API is stateless |
+| Scalability | Composite indexes on real query patterns. If needed, move to paid hosting, then add Redis, then add more app servers. All of this is possible because the API is stateless. On the free plan, PHP-FPM worker count stays low to respect the database's 76-connection limit and limited memory |
 | Performance | Eager loading, with `Model::preventLazyLoading()` outside production so N+1 issues raise errors. Reports calculated live with indexes; caching only if measurement shows a need. Pagination capped at 100 |
 | Reliability | Transactions in actions. Notifications and email dispatched after commit. Failed jobs retained and retried |
-| Logging | JSON logs with `request_id`, `user_id` and `workspace_id`. Security events logged: failed logins, role changes, invitation use, denied access |
-| Backup | Nightly `mysqldump --single-transaction`, encrypted and copied off-server. 14-day retention. Rehearsed restore |
-| Deployment | Nginx serves the static build and PHP-FPM. Backend: install, migrate, cache configuration, restart workers. Frontend: build and atomically replace the files. Migrations stay backward compatible for one release, so the two apps need not deploy at the same moment |
+| Logging | JSON logs written to `stderr` with `request_id`, `user_id` and `workspace_id`, as the container's disk is temporary. Security events logged: failed logins, role changes, invitation use, denied access |
+| Backup | Demo data is disposable. Recovery is a rebuild from migrations and seeders, rehearsed before release. Real backups are required before commercial use |
+| Deployment | See section 10. Migrations stay backward compatible for one release, so application code and schema need not change at the same moment |
 
-**Recommended first deployment timing:** right after authentication (Phase 3). Cookie and domain problems appear only on real domains, and they are far cheaper to find early.
+**Recommended first deployment timing:** a small validation deployment in Phase 2, then the first real deployment right after authentication in Phase 3. Cookie and proxy problems appear only on real hosting, and they are far cheaper to find early.
 
 ---
 
@@ -380,7 +405,7 @@ Having authentication doesn't make the system secure, and these controls don't e
 
 | ID | Risk | Impact | Likelihood | Mitigation |
 |---|---|---|---|---|
-| **R1** | Cookies fail in production. Platform subdomains such as `*.onrender.com` are typically on the Public Suffix List, so browsers treat each app as a separate site | High | High if unplanned | Use a custom domain (D7). Deploy early (Phase 3) |
+| **R1** | Cookies fail on hosting. `onrender.com` and similar platform domains are on the Public Suffix List, so separately hosted apps are different sites | High | Avoided by design | One origin (D7). Validate in Phase 2 and deploy early in Phase 3 |
 | **R2** | A tenant query bypasses the global scope | Critical | Medium | Fail-closed scope, architecture tests, composite foreign keys, isolation suite |
 | **R3** | A new route lacks tenant middleware or a policy | Critical | Medium | Route guard test fails on any uncovered route |
 | **R4** | Middleware order breaks silently after an upgrade | Critical | Low | An explicit test proves a cross-tenant ID returns 404 |
@@ -392,3 +417,94 @@ Having authentication doesn't make the system secure, and these controls don't e
 | **R10** | Scope creep delays completion | High | High | Section 4 of the requirements controls scope. New ideas go to the postponed list |
 | **R11** | Public demo abused for spam or offensive content | Medium | Medium | Mail disabled for demo accounts, rate limits, nightly reset |
 | **R12** | AI-generated code that you cannot explain | High for interviews | Medium | Small pull requests that you review, with key concepts explained at each phase |
+| **R13** | A recruiter meets the one-minute wake-up, or a slow free-tier response, and leaves | Medium | High | README warning, clear waking message, video and screenshots as backup. No dependence on keep-alive tricks |
+| **R14** | Render free plan rejects something the design needs, such as the Docker image's memory use | High | Medium | Phase 2 validation before anything depends on it, with fallbacks in section 10 |
+| **R15** | Aiven powers off an idle database, or deletes one powered off for 180 days | Medium | Medium | Nightly reset gives regular activity. Runbook covers power-on and rebuild from seeders |
+| **R16** | GitHub disables scheduled workflows after 60 days without repository activity, stopping resets | Medium | High after active development | Runbook to re-enable. Reset is also manually triggerable. Delayed runs are acceptable |
+| **R17** | Verification and invitation emails fail, or reach spam, without an owned domain | High | Medium | Validate in Phase 2. Fallback in section 10 |
+| **R18** | Wrong client IP behind the platform proxy breaks or weakens IP rate limits | Medium | Medium | Verify in Phase 2. Sensitive limits also key on email or user, not IP alone |
+| **R19** | Provider changes or ends a free tier | Medium | Medium | Standard Docker and MySQL, no provider-specific code, seeders recreate data |
+
+---
+
+## 10. Hosting strategy
+
+**Goal:** a public live URL that recruiters and developers can test, at no or minimal cost, with no purchased domain or paid VPS, and **with Sanctum cookie authentication unchanged.** Plan details below were checked on 2026-11-05 and can change.
+
+### Can both apps run under one origin on a platform domain?
+
+**Yes, and this is the recommendation.** Nginx in one container routes by path on one URL:
+
+| Path | Served by |
+|---|---|
+| `/api/*`, `/sanctum/*` | Laravel through PHP-FPM |
+| `/up` | Laravel health check |
+| Everything else | The React build, falling back to `index.html` for client-side routes |
+
+The browser sees one origin, so cookies are first-party and the login flow matches Sanctum's documented SPA flow. Sanctum's stated requirement, that the SPA and API share the same top-level domain, is satisfied because they share the same host.
+
+### Why the platform constraint leads here
+
+`onrender.com`, `vercel.app`, `netlify.app`, `up.railway.app`, `fly.dev`, `alwaysdata.net` and `duckdns.org` are all on the Public Suffix List. Browsers refuse a cookie set for the whole of such a domain. So the usual `app.` plus `api.` setup is unavailable without a custom domain, whichever of these providers is chosen. The realistic free choice is therefore one origin.
+
+### Options evaluated
+
+| Option | Cookie auth | Security and architecture trade-off | Verdict |
+|---|---|---|---|
+| **One Docker service on Render free + Aiven free MySQL** | Works by design: one origin | No CORS surface and every part of routing is under our control. Both apps deploy together on this profile. Sleeps when idle | **Recommended** |
+| Render static site with a rewrite to a Render web service | Unverified | Keeps deployment separate, and the SPA loads while the API sleeps. **Render's docs allow a rewrite to a full URL but don't describe cookie, header or method handling** | Optional experiment only |
+| Vercel or Netlify frontend with a proxy rewrite to the API | Probably works, needs vendor check | Separate deployment, but adds a third provider, and the proxy changes `Host` and forwarded IP handling | Fallback |
+| Oracle Cloud Always Free VM with MySQL HeatWave | Works: one origin on a free DNS name | Real MySQL and no sleep, with a persistent worker. **You run and patch the server yourself.** Idle instances can be reclaimed, capacity can be unavailable, and the card requirement is unconfirmed | Fallback if sleeping is unacceptable |
+| Railway | Works: one origin | The free plan's $1 monthly credit is too small for this always-running container. Its $5 Hobby plan is the simplest paid step | Best low-cost upgrade |
+| Separate services, `SameSite=None` cookies | Unreliable | Conflicts with Sanctum's documented domain requirement, and browsers increasingly restrict third-party cookies | Rejected |
+| Replace Sanctum cookies with bearer tokens | Changes the design | Tokens readable by JavaScript can be stolen through XSS, which is a security downgrade for hosting convenience | Rejected |
+| alwaysdata free | Works: one origin | MariaDB, not MySQL, so local and CI behaviour would differ. Long-running services are paid only | Rejected |
+| InfinityFree | Unsuitable | Mandatory browser check affects non-browser clients. No queue workers or scheduled tasks are reported | Rejected |
+| Koyeb, Fly.io | Not applicable | Pricing pages show no free compute for new users | Rejected on cost |
+
+### Components and limitations
+
+| Need | Solution | Limitation |
+|---|---|---|
+| Web app | Render free web service, Docker | Sleeps after 15 minutes without traffic, and wakes in about a minute. 750 free hours a month, enough for one service. May restart at any time. Render's docs say not to use free instances for production. **Docker on the free plan is confirmed by validation, as PHP needs it** |
+| Database | Aiven free MySQL 8.4 | 1 CPU, 1 GB RAM, 1 GB disk, 76 connections, one node, no SLA. Can be powered off when inactive after notice. Region may not be selectable, so Render's region is matched to it, and cross-provider latency is expected |
+| Queue worker | A second process in the same container | Runs only while awake, which is acceptable: jobs are created by requests, which wake the service. Unfinished jobs stay in the database and resume |
+| Scheduler and reset | GitHub Actions scheduled workflow, connecting to the database directly | Can be delayed. Disabled after 60 days without repository activity on a public repository |
+| Migrations | GitHub Actions job before deployment | No shell or one-off jobs on the free plan. Workflow secrets aren't exposed to pull requests from forks |
+| Email | Brevo HTTP API (`symfony/brevo-mailer`), as Render's free plan blocks SMTP ports 25, 465 and 587 | Resend requires an owned domain. **Brevo sending from a verified free-mail address, and its current quota, could not be confirmed from its docs, and such mail may reach spam** |
+| Files | None stored in V1 | The disk is wiped on restart, spin-down and redeploy |
+| Logs | `stderr` to Render logs | Limited retention |
+
+**Why Render isn't used for the database:** its free data offering is Postgres, not MySQL, and the free Postgres database expires after 30 days.
+
+### Phase 2 hosting validation
+
+These are unverified until tried on real accounts. Each is a gate before later work relies on it.
+
+| # | Check | If it fails |
+|---|---|---|
+| 1 | Docker image with Nginx, PHP-FPM and a worker deploys and stays within Render free memory | Reduce workers, then use Railway Hobby or Oracle |
+| 2 | Laravel connects to Aiven over verified TLS, and the region latency is tolerable | Evaluate Oracle HeatWave |
+| 3 | Aiven accepts composite foreign keys, the generated column, `CHECK` and `SELECT ... FOR UPDATE` | Evaluate Oracle HeatWave. **The database safeguards are not weakened** |
+| 4 | All migrations, including framework tables, pass with `sql_require_primary_key` on | Fix the migrations, or change the setting if the free plan allows |
+| 5 | The real Sanctum cookie flow works on the live URL (completed in Phase 3) | Diagnose proxy settings. Don't change the authentication method without your approval |
+| 6 | Laravel sees the real client IP and ignores a spoofed `X-Forwarded-For` | Key limits on email or user and adjust the trusted proxy settings |
+| 7 | Brevo delivers to Gmail and Outlook from a verified address | Fallback below |
+| 8 | Scheduled migration or reset workflow reaches Aiven from GitHub Actions | Trigger manually, or use the fallback hosting |
+
+**Email fallback:** verification and invitations remain fully built and tested in CI and locally with a mail catcher. The live demo disables public registration and offers only seeded, already verified accounts. The README explains why. A low-cost domain can later unlock normal sending through Resend.
+
+### Moving to a custom domain or VPS later
+
+| Step | Change required | Application code changed? |
+|---|---|---|
+| Add a custom domain to the same service | DNS and `APP_URL`, stateful domains, trusted hosts. Send email from the domain | No |
+| Move to a paid plan | Remove sleep. Split the worker into its own service | No |
+| Move to a VPS or split `app.` and `api.` | Environment values in section 6, Nginx and deployment scripts. CORS enabled through configuration, with a CORS test added | No |
+| Prepare for commercial SaaS | Real backups, monitoring, managed database, deletion features, legal review | Yes: V1.1 features |
+
+To keep this true, these rules apply from Phase 2: no hard-coded hostnames, all origin and cookie settings come from the environment, the frontend talks to Laravel only through the HTTP API, and no provider-specific code enters `app/`.
+
+### How to explain this in an interview
+
+> "Sanctum's session cookies need the SPA and API on the same site, but shared hosting domains are on the Public Suffix List, so two separately hosted services can't share a cookie. Rather than downgrade to bearer tokens in JavaScript-readable storage, I served both from one origin through Nginx path routing. The apps stay separate in code and CI, and the cookie settings are environment-driven, so moving to subdomains on a real domain is a configuration change. The trade-offs are cold starts and no uptime guarantee, which is acceptable for a portfolio demo but not for customers. Before commercial use I'd move to paid infrastructure with backups and monitoring."

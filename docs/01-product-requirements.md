@@ -1,6 +1,6 @@
 # 01 — Product Requirements
 
-**Status:** Draft for review · **Date:** 2026-11-05 · **Applies to:** WorkFlow Version 1
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Applies to:** WorkFlow Version 1
 
 Related: [Architecture](02-system-architecture.md) · [Database](03-database-design.md) · [Permissions](04-permissions-matrix.md) · [API](05-api-specification.md) · [Testing](06-testing-strategy.md) · [Roadmap](07-development-roadmap.md)
 
@@ -10,7 +10,7 @@ Related: [Architecture](02-system-architecture.md) · [Database](03-database-des
 
 WorkFlow is a multi-tenant project and workflow management platform. Organisations each get a private **workspace** containing their members, projects, tasks, comments, notifications and activity history. One organisation must never be able to read or change another's private data.
 
-The project also has to work as a portfolio piece. So V1 favours a small feature set built to a high engineering standard: provable tenant isolation, a tested permission model, and a real deployment. It does not try to match the feature breadth of commercial products.
+WorkFlow is **a portfolio project first**, with the possibility of becoming a SaaS product later. So V1 favours a small feature set built to a high engineering standard: provable tenant isolation, a tested permission model, and a public live demo at little or no cost. It does not try to match the feature breadth of commercial products. Its hosting is a demonstration environment, not production infrastructure for customer data.
 
 ### Success measures
 
@@ -29,11 +29,11 @@ The project also has to work as a portfolio piece. So V1 favours a small feature
 
 ---
 
-## 2. Decisions that need your confirmation
+## 2. Confirmed decisions
 
-The brief left these points open, or I am recommending something different from what it proposed. All seven documents **assume the recommendation**, so a different answer means revising them. Please confirm or change each one.
+D1–D6 and D8–D11 were confirmed on 2026-11-05. D7 was revised on the same date to a portfolio-first, low-cost strategy. Its direction is confirmed, and the named providers depend on the hosting validation in Phase 2.
 
-| ID | Question | Recommendation | Why | Cost of the alternative |
+| ID | Question | Confirmed decision | Why | Cost of the alternative |
 |---|---|---|---|---|
 | **D1** | Is "Project Manager" a workspace-wide power or per-project? The brief lists it as a workspace role but also says "assign project managers" to a project. | **Both layers.** The workspace role grants the right to *create* projects and be *eligible* to manage them. A person manages only projects where `project_members.role = manager`. Only Administrators have automatic access to every project. | Otherwise any PM could read every project in the organisation, which makes project membership meaningless. | Workspace-wide PM access is simpler to code but removes confidentiality between projects. |
 | **D2** | What can a Team Member see and change inside a project? The brief says "views assigned tasks" and also "participates in project activities". | They **view all tasks** in projects they belong to and comment on any of them. They **change status only on tasks assigned to them**. | A Kanban board showing only your own cards is not a useful board. Limiting writes keeps accountability clear. | Assigned-only visibility requires a second, filtered board and blocks collaboration. |
@@ -41,7 +41,7 @@ The brief left these points open, or I am recommending something different from 
 | **D4** | One assignee per task, or several? | **One** (`tasks.assignee_id`, nullable). | Clear ownership and simpler notifications, "my tasks" and reports. | Multiple assignees need a join table and an answer to "who can complete it?". Moving to a join table later is a contained migration. |
 | **D5** | How is the active workspace identified on API requests? The brief implies a selected "active" workspace. | **In the URL path:** `/api/v1/workspaces/{slug}/...`. "Active workspace" is then a frontend idea, not server session state. | A workspace stored in the session breaks when two tabs show different workspaces: a user can act on the wrong organisation's data without noticing. See ADR-03. | A header works technically but is less visible, less testable and does not fit Laravel's route binding as well. |
 | **D6** | Require email verification? It is not in the brief. | **Yes, in V1.** | Without it, someone can register with another person's address before that person is invited (account pre-hijacking). | Skipping it removes one flow but leaves that attack open and makes invitation matching less trustworthy. |
-| **D7** | Which hosting provider and domain? The brief says one provider but names none. | **A small Linux VPS and a purchased custom domain**, using `app.<domain>` and `api.<domain>`. | Sanctum cookie authentication needs both apps on the same registrable domain. Shared platform domains generally will not work (Risk R1 in the architecture document). Queue workers need a long-running process. | A PaaS is less operational work but may cost more. Shared hosting cannot reliably run workers. |
+| **D7** | Where is the demo hosted, with no purchased domain or paid VPS? | **Free hosting on a single origin.** One Docker web service on Render's free plan serves the React build and the Laravel API from `https://<service>.onrender.com`. Aiven's free plan provides MySQL 8.4. Providers are confirmed only after Phase 2 validation. | Sanctum cookie authentication is kept unchanged. Using one origin avoids the cross-site cookie problem on shared platform domains. See [architecture, section 10](02-system-architecture.md#10-hosting-strategy). | The demo sleeps after 15 minutes idle and takes about a minute to wake. It isn't production hosting. A custom domain or VPS can be added later through configuration. |
 | **D8** | One repository or two? | **One repository** (monorepo) with `backend/` and `frontend/`, still built and deployed independently. | You already have one repo. A feature branch can contain its API and UI together, and recruiters find everything in one place. | Two repos show stricter separation but split every feature across two branches and two pull requests. |
 | **D9** | Should workspaces, projects and user accounts be deletable? The brief only says "archive" for projects. | **Not in V1.** Projects archive. Tasks and comments soft-delete. Workspace and account deletion move to V1.1. | Correct deletion cascades, retention and privacy handling are a substantial feature. | Real users would need this, and **UK/EU privacy law may require account erasure in production**. It must be built before WorkFlow holds real customer data. |
 | **D10** | Should descriptions and comments support rich text? | **Plain text** in V1, displayed with preserved line breaks. | Removes the largest source of stored XSS. | Markdown needs a sanitising pipeline. It is a good V1.1 feature. |
@@ -62,7 +62,8 @@ These have sensible defaults and don't need a decision now, but the brief did no
 | Removing a member who has assigned tasks | Their tasks become unassigned, and comment history stays attributed to them |
 | Removing the last Administrator | Blocked |
 | Platform-wide support or super-admin access | None in V1. Support would use audited database procedures |
-| Public demo abuse | Seeded demo workspace, nightly reset, email disabled for demo accounts |
+| Public demo abuse | Seeded demo accounts, nightly reset of all data, email disabled for demo accounts |
+| Email without an owned domain | Send through an HTTP email API from a verified sender, with a documented fallback if this fails validation ([architecture, section 10](02-system-architecture.md#10-hosting-strategy)) |
 
 ---
 
@@ -149,11 +150,21 @@ Priority is **M** (must have for V1) or **S** (should have, may slip without fai
 | FR-G5 | Mark one or all notifications read, and show an unread count per workspace in the switcher | M |
 | FR-G6 | Removing a person from a workspace deletes their notifications from it | M |
 
+### H. Public demo
+
+| ID | Requirement | Pri |
+|---|---|---|
+| FR-H1 | Seeded demo accounts cover all three roles, and a second workspace demonstrates isolation | M |
+| FR-H2 | Demo accounts cannot change their email or password, and cannot send invitations | M |
+| FR-H3 | All demo data resets nightly. The reset refuses to run unless demo mode is explicitly enabled | M |
+| FR-H4 | A permanent banner and the sign-up page state that data is deleted nightly and that real or sensitive data must not be entered | M |
+| FR-H5 | If the API is waking up, the SPA shows a clear "waking up" message and retries, not an error | M |
+
 ---
 
 ## 4. Version 1 scope
 
-**In scope:** authentication with email verification, multi-tenant workspaces, membership and roles, invitations, project management, task management, single assignment, Kanban, comments, dashboard, basic reporting, activity history, in-app notifications, automated tests, one production deployment and one demo workspace.
+**In scope:** authentication with email verification, multi-tenant workspaces, membership and roles, invitations, project management, task management, single assignment, Kanban, comments, dashboard, basic reporting, activity history, in-app notifications, automated tests, and one public demo deployment with seeded data.
 
 ### Postponed
 
@@ -167,6 +178,7 @@ Priority is **M** (must have for V1) or **S** (should have, may slip without fai
 | V1.2 | Sub-tasks, labels, multiple assignees | Each changes the task model and reports |
 | V1.2 | Live updates through WebSockets | Polling is enough at this scale |
 | V1.2 | Custom workflows or statuses per project | Affects Kanban, reports and permissions |
+| Before any commercial use | Paid hosting, custom domain, real backups, monitoring, separate queue worker | The free demo environment must not hold customer data |
 | Later | Custom roles, SSO, audit export, public API tokens | Enterprise features |
 | Later | Time tracking, Gantt charts, calendar, task dependencies | Each is a separate product area |
 | Excluded by the brief | AI assistants, payments, chat, video conferencing, mobile apps | Out of scope |
@@ -179,16 +191,16 @@ Targets are deliberately modest and measurable on the seeded dataset: 10 workspa
 
 | Area | Requirement |
 |---|---|
-| Performance | API reads under 300 ms at the 95th percentile on the production server. No N+1 queries on list endpoints, enforced in tests |
+| Performance | API reads under 300 ms at the 95th percentile, measured locally in the production container on the seeded dataset. No N+1 queries on list endpoints, enforced in tests. **The free live demo has no speed target**: it is slower, with about a minute's wake-up after idle |
 | Scalability | Stateless API, with sessions, cache and queue in the database. Every tenant query uses an index that starts with a tenant or parent key. Scale vertically first |
-| Reliability | State changes and their activity records commit in one transaction. Notifications and emails are queued after commit and retried |
+| Reliability | State changes and their activity records commit in one transaction. Notifications and emails are queued after commit and retried. No uptime target for the free demo |
 | Maintainability | One place for each rule: policies for permissions, actions for business operations. Linting and formatting enforced in CI |
 | Accessibility | Target WCAG 2.2 AA: keyboard operation, visible focus, labelled forms, sufficient contrast. Kanban has a non-drag alternative |
 | Responsive design | Usable from 360 px wide upwards. On small screens Kanban shows one column at a time |
 | Error handling | Consistent API error format with a `request_id`. The UI always shows a loading, empty, error or success state |
 | Logging | Structured logs with request ID, user ID and workspace ID. Passwords, tokens and session IDs are never logged |
-| Backup and recovery | Nightly encrypted off-server backups kept for 14 days. Recovery point 24 hours, recovery time 4 hours. **One restore rehearsal before release** |
-| Deployment | Backend and frontend deploy independently. Pending migrations run as an explicit deployment step |
+| Backup and recovery | Demo data is disposable, so recovery means rebuilding from migrations and seeders, **rehearsed before release**. The provider's backups are a bonus, not relied on. Real backups with recovery targets are required before commercial use |
+| Deployment | Backend and frontend keep separate code, dependencies, configuration, tests and CI jobs. The free profile packages both builds into one image for one origin. Pending migrations run as an explicit deployment step. Moving to separate deployment requires configuration and deployment changes, not application redesign |
 | Documentation | README with setup instructions, these documents kept current, architecture decisions recorded |
 
 ---
@@ -219,7 +231,7 @@ V1 is ready to merge and release only when **all** of these are true.
 2. A user cannot read or change another workspace's resource by changing any ID or slug. The response is 404 and matches the response for a resource that does not exist.
 3. Every cell of the permission matrix has a passing automated test.
 4. The database rejects cross-workspace references inserted directly, bypassing the application.
-5. The session cookie is `HttpOnly`, `Secure` and `SameSite=Lax` in production, and state-changing requests without a valid CSRF token are rejected.
+5. On the live demo, the session cookie is host-only, `HttpOnly`, `Secure` and `SameSite=Lax`, and state-changing requests without a valid CSRF token are rejected.
 6. Rate limits are verified on login, password reset and invitation sending.
 7. The security checklist in the architecture document has been reviewed item by item, with remaining risks written down.
 
@@ -235,5 +247,6 @@ V1 is ready to merge and release only when **all** of these are true.
 
 13. CI passes on `main`: backend tests against real MySQL, frontend tests, linting and dependency audit.
 14. Three end-to-end smoke flows pass against a production-like build.
-15. A backup has been restored successfully to a separate database.
-16. The live demo works over HTTPS, and a new developer can follow the README to run the project locally.
+15. The demo database has been rebuilt from empty using migrations and seeders, and a dump has been restored to a separate database.
+16. The live demo works over HTTPS on its platform URL, and a new developer can follow the README to run the project locally.
+17. The README states the demo's limitations honestly, including the wake-up delay and nightly reset, and links to a short video or screenshots for when the demo is unavailable.

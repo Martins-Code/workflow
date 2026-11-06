@@ -1,6 +1,6 @@
 # 03 — Database Design
 
-**Status:** Draft for review · **Date:** 2026-11-05 · **Engine:** MySQL 8.4, InnoDB, `utf8mb4`
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Engine:** MySQL 8.4, InnoDB, `utf8mb4`
 
 ---
 
@@ -430,3 +430,19 @@ This operation shows why the foreign key choices matter. All of it runs in one t
 6. Commit, then dispatch any resulting notifications.
 
 If a step is forgotten, the `RESTRICT` constraints make the transaction fail, not leave corrupt data. A bug surfaces as an error instead of silently damaging tenant data.
+
+---
+
+## 7. Hosting compatibility
+
+**This schema doesn't change for free hosting (D7).** It requires real MySQL 8.4 behaviour, which is why MariaDB and other MySQL-compatible hosts were not accepted without testing.
+
+| Requirement | Why it matters | How it is checked on Aiven |
+|---|---|---|
+| Composite foreign keys, `CHECK` and generated columns | Tenant integrity and invitation uniqueness | Phase 2 hosting validation runs the constraint tests against the host |
+| `SELECT ... FOR UPDATE` | Last-Administrator and invitation race protection | Same validation |
+| Primary key on every table | Aiven's default `sql_require_primary_key` setting requires it. All application tables comply. **Framework tables are verified by running migrations with the setting on**, and CI uses the same setting | Migrations in CI and on Aiven |
+| Size within the 1 GB free disk | Demo seed data stays small. The larger 20,000-task performance dataset runs locally only | Checked after seeding |
+| Under 76 connections | PHP-FPM workers and the queue worker stay well below this | Configuration review |
+
+Application tables gain no demo-specific columns. Demo accounts are identified through configuration and `users.email`.

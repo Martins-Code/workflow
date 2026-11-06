@@ -1,15 +1,17 @@
 # 05 — API Specification
 
-**Status:** Draft for review · **Date:** 2026-11-05 · **Base URL:** `https://api.example.com/api/v1`
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Base URL:** `/api/v1`, on the same origin as the SPA
 
-This is the V1 API contract. Permission names refer to the [permissions matrix](04-permissions-matrix.md).
+This is the V1 API contract. Permission names refer to the [permissions matrix](04-permissions-matrix.md). On the demo, the full URL is `https://<service>.onrender.com/api/v1`. The contract doesn't change if the API later moves to its own hostname.
 
 ---
 
 ## 1. Conventions
 
 - **Format:** JSON. Clients send `Accept: application/json`.
-- **Authentication:** Sanctum session cookie, plus an `X-XSRF-TOKEN` header on `POST`, `PUT`, `PATCH` and `DELETE`.
+- **Authentication:** Sanctum session cookie, plus an `X-XSRF-TOKEN` header on `POST`, `PUT`, `PATCH` and `DELETE`. On the demo, no CORS is involved, as the SPA and API share one origin.
+- **Health check:** `GET /up` (outside `/api/v1`) reports whether the application is running.
+- **Demo availability:** after idle time, the first request can take about a minute and may receive a non-JSON platform page. The SPA handles this as "waking up". It isn't part of the API contract.
 - **Dates:** `YYYY-MM-DD` for calendar dates. ISO 8601 UTC for timestamps.
 - **Versioning:** `/api/v1`. Breaking changes require `/v2`.
 - **Pagination:** `?page=2&per_page=25`, with a maximum `per_page` of 100.
@@ -74,6 +76,8 @@ The server doesn't remember a selected workspace between requests. No request bo
 | 401 | `unauthenticated` | No valid session |
 | 403 | `forbidden` | Authenticated and may see the resource, but may not perform this action |
 | 403 | `email_not_verified` | The action requires a verified email |
+| 403 | `demo_restricted` | A seeded demo account attempted a restricted action |
+| 403 | `registration_disabled` | Public registration is off because the email fallback is active |
 | 404 | `not_found` | Doesn't exist, **or the user isn't allowed to know that it exists** |
 | 409 | `last_administrator`, `project_archived`, `last_project_manager`, `already_member`, `invitation_pending` | Valid request that conflicts with current state |
 | 410 | `invitation_invalid` | Token expired, revoked or already used |
@@ -205,7 +209,7 @@ Tokens travel in the request **body**, and in the frontend link's URL **fragment
 }
 ```
 
-**Errors:** 403; 409 `already_member`; 409 `invitation_pending`; 422; 429.
+**Errors:** 403, including `demo_restricted`; 409 `already_member`; 409 `invitation_pending`; 422; 429.
 
 ### Accept flow
 
