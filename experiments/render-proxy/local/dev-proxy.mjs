@@ -5,7 +5,9 @@
 // test page and backend work. It says nothing about Render itself.
 //
 // Usage: node local/dev-proxy.mjs
-// Optional environment variables: PORT (default 5180), BACKEND_URL (default http://127.0.0.1:8090)
+// Optional environment variables: PORT (default 5180), BACKEND_URL (default http://127.0.0.1:8090),
+// SIMULATE=missing-rewrite to serve index.html for /api/* as if the rewrite rule were missing
+// (used to check that the test page fails fast on a misconfigured static site).
 
 import http from 'node:http';
 import fs from 'node:fs/promises';
@@ -72,7 +74,8 @@ async function serveStatic(req, res) {
 http
   .createServer((req, res) => {
     const pathname = (req.url ?? '/').split('?')[0];
-    if (pathname.startsWith('/api/') || pathname.startsWith('/sanctum/')) {
+    const forwarding = process.env.SIMULATE !== 'missing-rewrite';
+    if (forwarding && (pathname.startsWith('/api/') || pathname.startsWith('/sanctum/'))) {
       forward(req, res);
       return;
     }

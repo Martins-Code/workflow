@@ -1,12 +1,18 @@
 # Render forwarding experiment
 
-> **Status (2026-11-10):** built, and checked locally against a Node.js stand-in for Render. **Not deployed to Render.** **The Docker image has never been built**, because Docker isn't installed on my development machine. Nothing here shows yet whether Render's forwarding works.
+> **Status (2026-11-10):** built, with test-harness corrections C1–C6 applied, and checked locally against a Node.js stand-in for Render. **Not deployed to Render.** **The Docker image has never been built**, because Docker isn't installed on my development machine. Nothing here shows yet whether Render's forwarding works.
+>
+> | Proven locally | Still unverified |
+> |---|---|
+> | The test page and PHP backend measure what they claim: methods, bodies, cookie storage and receipt, headers and error responses, through a forwarding proxy | Everything about **Render**: forwarding, cookies, headers, client IP, sleeping and latency |
+> | The harness reports INCONCLUSIVE, not PASS, when its environment can't produce the condition under test (loopback IPs, a backend that never sleeps) | Whether the **Docker image builds**, and whether it fits Render's free 512 MB instance |
+> | A misconfigured rewrite is reported within a second, and an unreachable backend within 120 s | Browser behaviour beyond the Chromium-based browser used locally |
 
 This is a small, throwaway experiment that answers one question before I build WorkFlow's authentication:
 
 **Can a free Render static site forward browser requests to a separate Render Docker web service, while preserving the HTTP behaviour that Laravel Sanctum's cookie-based SPA authentication needs?**
 
-It isn't part of the WorkFlow application. It has no database, no authentication and no real data. It lives on the `spike/render-proxy-test` branch, which is never merged into `main`. Its findings will be copied into [`docs/02-system-architecture.md`](../../docs/02-system-architecture.md) and the [development journal](../../docs/08-development-journal.md) once it has run on Render.
+It isn't part of the WorkFlow application. It has no database, no authentication and no real data. It lives on the `spike/render-proxy-test` branch, which is never merged into `main`. Its findings will be copied into [`docs/02-system-architecture.md`](../../docs/02-system-architecture.md) and the [development journal](https://github.com/Martins-Code/workflow/blob/main/docs/00-development-journal.md) once it has run on Render. The journal link points at `main`, because the journal doesn't exist on this branch. It works once the documentation branch is merged.
 
 ---
 
@@ -96,6 +102,7 @@ The local stand-in shows that the test page and backend behave as designed. **It
   - Every request uses a relative path, so it goes to the page's own origin. `redirect: 'manual'` makes a Render *redirect* (as opposed to a rewrite) visible instead of silently followed.
   - Responses are rendered with `textContent`, never as HTML.
   - The page sets `Referrer-Policy: same-origin`, the same policy WorkFlow will use. Its Content Security Policy only allows scripts from its own origin.
+  - **Timeouts and early failure:** the full run waits at most 120 seconds for the backend, retrying every 5 seconds, because a timeout or error page may just mean the backend is waking. It stops at once if the static site answers `/api/*` with a redirect or with its own `index.html`, because waiting can't fix a misconfigured rule. If the backend is never reached, P1 is reported as FAIL with every attempt in its diagnostics, and the checks that need the backend are marked "not run". The separate wake test allows 4 minutes.
 - **Limitations:**
   - `connect-src` allows any `https:` destination, so P7 can reach the backend directly.
   - Diagnostics show up to 400 characters of each response body.
@@ -113,6 +120,7 @@ The local stand-in shows that the test page and backend behave as designed. **It
 - **How it works:**
   - It rewrites `Host` to the backend's, appends the socket address to `X-Forwarded-For`, and sets `X-Forwarded-Proto: http` and `X-Forwarded-Host`.
   - Unknown paths get `index.html`, like Render's `/* → /index.html` rule.
+  - `SIMULATE=missing-rewrite` makes it serve `index.html` for `/api/*` too, imitating a missing or misordered rewrite rule. That's the only way to exercise the early-failure path locally.
   - It blocks path traversal and binds only to 127.0.0.1.
 - **What it doesn't imitate:** Render's real headers, HTTP/2, CDN behaviour, timeouts, sleeping or loading page. Those are exactly what the Render run has to establish.
 
@@ -129,11 +137,11 @@ A check never passes just because a request returned HTTP 200. Each PASS require
 | Check | What it verifies | What it doesn't establish |
 |---|---|---|
 | **P1** Methods and bodies | `GET` with a query string (decoded values compared). `POST`, `PUT`, `PATCH` and `DELETE` with a 64 KB JSON body containing non-ASCII text: method, path, byte length, SHA-256 and field-by-field JSON equality. Also the rule order: `/api/does-not-exist` must return the backend's 404, and a client route must return `index.html` | Bodies larger than 64 KB, streaming, concurrency. **A `DELETE` body failure alone isn't blocking**: WorkFlow's `DELETE` endpoints send no body ([API specification](../../docs/05-api-specification.md)) |
-| **P2** Cookies | Clears cookies, then calls `/sanctum/csrf-cookie`. Separates **browser storage** (readable `XSRF-TOKEN` is in `document.cookie`, and the `HttpOnly` session cookie isn't) from **backend receipt** (the next `/api/echo` reports both cookies, with `XSRF-TOKEN` unchanged). On HTTPS, checks that the backend *intended* `Secure` | **Cookie attributes aren't verified automatically**: JavaScript can't read `Domain`, `Secure`, `HttpOnly` or `SameSite`. They need the manual DevTools check in section 6. `SameSite` enforcement isn't exercised at all |
-| **P3** Headers | On a `POST`: `Cookie` contains both test cookies, `X-XSRF-TOKEN` equals the cookie the backend received, `Accept` and `X-Requested-With` are preserved, `Referer` starts with the page's origin, and `Origin` (if the browser sends it) equals the page's origin. On a `GET`: `Referer` arrives | Laravel's own Sanctum check. That's re-tested with real Laravel in Phase 3. `Host` and `X-Forwarded-Host` are reported but not judged |
+| **P2** Cookies | **Set, clear, set again**, so it's meaningful on every run. First it sets cookies, then an expiring `Set-Cookie` must remove `XSRF-TOKEN` from `document.cookie`, and the next request must reach the backend without either cookie, including the `HttpOnly` one. Then fresh cookies are set: the new token must differ from the old one. It separates **browser storage** (readable `XSRF-TOKEN` is in `document.cookie`, and the session cookie isn't) from **backend receipt** (the next `/api/echo` reports both, with `XSRF-TOKEN` unchanged). On HTTPS, checks that the backend *intended* `Secure` | **Cookie attributes aren't verified automatically**: JavaScript can't read `Domain`, `Secure`, `HttpOnly` or `SameSite`. They need the manual DevTools check in section 6. `SameSite` enforcement isn't exercised at all |
+| **P3** Headers | On a `POST`, the headers this page sends: `Cookie` contains both test cookies, `X-XSRF-TOKEN` equals the cookie the backend received, and `Accept` and `X-Requested-With` are preserved. **`Origin` and `Referer` are added by the browser, so each is judged only if it arrived**: it must then carry the page's origin, not the backend's. The check fails only if neither arrived, because Sanctum needs one of them. The same rule applies to a `GET`. The PASS summary lists only headers that actually arrived | Laravel's own Sanctum check. That's re-tested with real Laravel in Phase 3. `Host` and `X-Forwarded-Host` are reported but not judged |
 | **P4** Error responses | 419, 422 and 429: backend marker header, exact status, JSON `Content-Type`, field-by-field body, and `Retry-After: 30` on 429 | Other statuses, and errors produced by Render itself |
-| **P5** Visitor IP | Sends one normal request and one with fake documentation-range addresses (`203.0.113.x`) in `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP` and `Forwarded`. A source is trustworthy only if it shows the **real public IP I enter** in both requests: a single-value header the platform overwrites, or an `X-Forwarded-For` entry at a fixed position from the right. Without an entered IP, P5 is INCONCLUSIVE | **Meaningful only on Render with my real public IP.** Locally the client, stand-in and backend all share 127.0.0.1, so a local PASS proves only that the analysis code runs. It also doesn't check that the hop count is stable over time |
-| **P6** Sleep and wake | Uses the container's start time to detect a fresh boot. **PASS needs evidence of a real wake:** uptime of at most 300 s *and* a slow first response, or responses that weren't from the backend before it became ready. The page records whether requests waited, failed, or received a non-API page such as Render's loading page | **Only possible on Render, after at least 16 minutes without traffic.** A local backend never sleeps. See correction C1 for one false-PASS path |
+| **P5** Visitor IP | Sends one normal request and one with fake documentation-range addresses (`203.0.113.x`) in `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP` and `Forwarded`. A source is trustworthy only if it shows the **real public IP I enter** in both requests: a single-value header the platform overwrites, or an `X-Forwarded-For` entry at a fixed position from the right. All comparisons are **exact, normalised addresses**, never substrings. Ports, brackets and IPv4-mapped IPv6 are stripped, and `Forwarded: for=` values are parsed. P5 is INCONCLUSIVE when no IP is entered, when the input isn't an IP address, or when it's a loopback or private address | **Meaningful only on Render with my real public IP.** Locally everything shares 127.0.0.1, so P5 reports INCONCLUSIVE there and only shows that the analysis runs. It doesn't check that the hop count is stable over time |
+| **P6** Sleep and wake | Uses the container's start time to detect a fresh boot. **PASS needs evidence of a real wake:** a fresh container (uptime of at most 300 s) **and** a first request that waited over 3 s, or responses that weren't from the backend before it became ready. A fresh container that answers at once is reported as a recent restart or deploy, which is INCONCLUSIVE. The page records whether requests waited, failed, or received a non-API page such as Render's loading page | **Only possible on Render, after at least 16 minutes without traffic.** A local backend never sleeps, so locally P6 can only be INCONCLUSIVE |
 | **P7** Latency | 15 forwarded pings after a warm-up, compared with 15 direct `no-cors` pings to the backend's own URL. Reports median and 95th percentile | **Local numbers are loopback timings and say nothing about Render.** On Render, results depend on my distance from the region. Thresholds are my own targets for an interactive app, not an external standard |
 
 ---
@@ -152,9 +160,11 @@ node experiments\render-proxy\local\dev-proxy.mjs
 
 Then I open `http://127.0.0.1:5180`, enter `127.0.0.1` as the public IP, and click **Run P1–P7**.
 
-### Local results, 2026-11-10
+Both local runs used the same environment: Windows, PHP 8.3 built-in server, Node.js 22 stand-in, and a Playwright-controlled Chromium-based browser. **Neither run says anything about Render.**
 
-Environment: Windows, PHP 8.3 built-in server, Node.js stand-in, a Playwright-controlled Chromium-based browser.
+### Local run 1: 2026-11-10, original harness
+
+This run is kept as it happened. Issues C1–C5 were found by reviewing the code afterwards.
 
 **HTTP checks with `curl` through the stand-in:**
 - `/sanctum/csrf-cookie` returned 204 with two separate `Set-Cookie` headers.
@@ -177,6 +187,33 @@ Environment: Windows, PHP 8.3 built-in server, Node.js stand-in, a Playwright-co
 | P7 | PASS | **Local loopback only:** median 20 ms forwarded against 13 ms direct (+7 ms), 95th percentile 28 ms. Says nothing about Render |
 
 The browser console showed four errors. They were the deliberate 404, 419, 422 and 429 responses, which browsers always log.
+
+### Local run 2: 2026-11-10, after corrections C1–C6
+
+The backend code hasn't changed since run 1, so its `curl` checks still apply. I ran the full set twice in a row, so P2's set-clear-set sequence ran on a browser that already held cookies.
+
+| Check | Reported | What this actually means |
+|---|---|---|
+| P1 | PASS | `GET` with query, and `POST`, `PUT`, `PATCH`, `DELETE` with a 65,701-byte JSON body: method, length, SHA-256 and content matched. Routing order is correct |
+| P2 | PASS | On both runs: cookies set, then removed from `document.cookie`, and the backend then received neither cookie, including the `HttpOnly` one. Fresh cookies replaced the old token, were stored and were returned. **Cookie attributes not inspected manually** |
+| P3 | PASS | `Cookie`, `X-XSRF-TOKEN` (matching), `Accept`, `X-Requested-With`, `Origin` and `Referer` arrived on the `POST`. On the `GET` the browser sent no `Origin`, which is noted and not failed, and `Referer` was correct |
+| P4 | PASS | 419, 422 and 429: status, JSON content type, body and `Retry-After: 30` unchanged |
+| P5 | INCONCLUSIVE | Correct for `127.0.0.1`, a loopback address. The analysis listed the fields that accepted fake values: `x_real_ip`, `true_client_ip`, `cf_connecting_ip`, `x_forwarded_for` and `forwarded` |
+| P6 | INCONCLUSIVE | The backend started 11 s before but answered in 34 ms: reported as a restart, not a wake-up |
+| P7 | PASS | **Local loopback only:** medians of 27 ms and 18 ms forwarded against 10 ms and 12 ms direct, across the two runs. Says nothing about Render |
+
+**Targeted checks of the corrections:**
+
+| Correction | Test | Result |
+|---|---|---|
+| C1 | Wake test run first against a backend that started 0 s earlier and answered in 133 ms | **INCONCLUSIVE** ("a recent restart or deploy, not a wake-up from sleep"). The original code would have reported PASS |
+| C2 | Two full runs in a row | Both runs exercised removal: the cookie existed before clearing, was removed, and the backend received none |
+| C3 | P3 on `POST` and `GET` | `Origin` judged on the `POST`, where it arrived. Absent on the `GET` and noted, not failed. The summary lists only headers that arrived |
+| C4 | Helper functions called directly in the page | `1.2.3.4` doesn't match `11.2.3.45`. `for="[2001:db8::1]:4711", for=198.51.100.7` parsed to `2001:db8::1` and `198.51.100.7`. `198.51.100.7:443` normalised to `198.51.100.7` |
+| C5 | Stand-in with `SIMULATE=missing-rewrite` | Stopped in **0.1 s**. P1 FAIL ("returned this page's own index.html, so the /api/* rewrite rule is missing or ordered after the /* rule"). Other checks "not run" |
+| C5 | Normal stand-in, backend stopped | Stopped after **121.5 s and 25 attempts**, which is the 120 s cap. P1 FAIL with every attempt (502, "connect ECONNREFUSED") in diagnostics. Other checks "not run" |
+
+**Additional defect found during this run (C6):** several *passing* checks displayed the detail "JSON without the backend marker", because the failure description was attached whether or not the check passed. The results were correct, but the diagnostics were misleading. I fixed it in `describeNonBackend`, which now returns nothing for a real backend response, and the second run showed no misleading details.
 
 ---
 
@@ -235,17 +272,18 @@ The browser console showed four errors. They were the deliberate 404, 419, 422 a
 
 ---
 
-## 7. Proposed corrections to the test harness
+## 7. Corrections to the test harness
 
-Reviewing the code after the local run, I found these issues. **None has been applied**: each is a small change I'll decide on before the Render run, so the code stays as tested.
+I found C1–C5 by reviewing the code after local run 1, and C6 during local run 2. **All six have been applied**, all in `frontend/app.js` apart from the stand-in option used to test C5. The backend didn't change. Each fix is the smallest change that makes the check report only what it can actually establish.
 
-| # | Issue | Effect | Smallest correction |
+| # | Issue | Effect before the fix | Correction applied |
 |---|---|---|---|
-| C1 | **P6 can falsely pass.** The separate wake test passes when the container's uptime is at most 300 s, even if the first response was fast. A backend restarted by a recent deploy would pass without any wake-up | False PASS on P6 | In `runWakeSequence`, also require a slow first attempt (over 3 s) or at least one non-backend response, the same evidence the probe already requires |
-| C2 | P2's "Expiring Set-Cookie removed the old XSRF-TOKEN" passes trivially when no cookie existed before | Overstates what P2 covered | Only add that check when `XSRF-TOKEN` was present before clearing |
-| C3 | P3's PASS summary always mentions `Origin`, even when the browser didn't send it. A note already says so | Misleading summary text | Build the summary from the headers that actually arrived |
-| C4 | P5's "your IP is visible" check uses substring matching, so `1.2.3.4` would match inside `11.2.3.45` | Possible false positive on visibility. The trustworthiness check itself uses exact matching | Compare exact normalised addresses, extracting the address from `Forwarded: for=` |
-| C5 | If forwarding is completely broken, **Run P1–P7** spends up to 4 minutes in the P6 wake loop before the other checks report | Slow feedback, not wrong results | Cap the wake loop inside the full run, or report P6 separately |
+| C1 | The separate wake test passed whenever the container's uptime was at most 300 s, even if the first response was fast | A recently deployed or restarted backend gave a false PASS on P6 | A PASS now also needs a first attempt slower than 3 s, or at least one response that wasn't from the backend. Otherwise the result is INCONCLUSIVE, described as a restart |
+| C2 | P2's cookie-removal check passed trivially when no cookie existed before | P2 claimed more than it tested on a first run | P2 sets cookies first, then clears them, checking both browser storage and backend receipt, then sets them again and confirms a new token |
+| C3 | P3's PASS summary always mentioned `Origin`, even when the browser didn't send it | Misleading summary | `Origin` and `Referer` are each judged only if they arrived, and fail only if both are missing. The summary lists the headers that arrived |
+| C4 | P5's visibility check used substring matching | `1.2.3.4` could match inside `11.2.3.45` | Exact comparisons of normalised addresses, including parsed `Forwarded: for=` values. Loopback and private addresses, and inputs that aren't IP addresses, are INCONCLUSIVE |
+| C5 | A completely broken forwarding setup kept the full run in the wake loop for up to 4 minutes | Slow feedback | The full run waits at most 120 s and stops at once on a redirect, or on `index.html` returned for `/api/*`. If the backend is never reached, P1 fails with diagnostics and the rest are "not run". `local/dev-proxy.mjs` gained `SIMULATE=missing-rewrite` to test this |
+| C6 | Passing checks could show the failure text "JSON without the backend marker" | Misleading diagnostics, though results were correct | `describeNonBackend` returns nothing for a real backend response |
 
 ---
 

@@ -79,11 +79,56 @@ function readCookie(name) {
 }
 
 function normaliseIp(value) {
-  if (!value) return '';
-  let ip = String(value).trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (value === null || value === undefined) return '';
+  let ip = String(value).trim().toLowerCase().replace(/^"|"$/g, '');
+  const bracketed = ip.match(/^\[([^\]]+)\](?::\d+)?$/); // "[2001:db8::1]:4711"
+  if (bracketed) ip = bracketed[1];
   ip = ip.replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/, '$1');
   ip = ip.replace(/^(\d+\.\d+\.\d+\.\d+):\d+$/, '$1');
   return ip;
+}
+
+function looksLikeIp(value) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(value) || (/^[0-9a-f:]+$/.test(value) && value.includes(':'));
+}
+
+// Loopback and private addresses never reach a public server as the visitor's
+// address, so a test that uses one can't say anything about Render.
+function isLoopbackOrPrivate(ip) {
+  return /^127\./.test(ip) || ip === '::1' || /^10\./.test(ip) || /^192\.168\./.test(ip)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^f[cd][0-9a-f]{2}:/.test(ip) || /^fe80:/.test(ip);
+}
+
+const IP_FIELDS = ['remote_addr', 'x_real_ip', 'true_client_ip', 'cf_connecting_ip', 'x_forwarded_for', 'forwarded'];
+
+// Exact, normalised addresses held by one field of the backend's client_ip report.
+// No substring matching: "1.2.3.4" must never match inside "11.2.3.45".
+function fieldAddresses(clientIp, field) {
+  if (field === 'x_forwarded_for') return (clientIp.x_forwarded_for_list || []).map(normaliseIp).filter(Boolean);
+  if (field === 'forwarded') {
+    const found = [];
+    for (const element of String(clientIp.forwarded || '').split(',')) {
+      for (const pair of element.split(';')) {
+        const [key, ...rest] = pair.trim().split('=');
+        if (key.toLowerCase() === 'for') found.push(normaliseIp(rest.join('=')));
+      }
+    }
+    return found.filter(Boolean);
+  }
+  return [normaliseIp(clientIp[field])].filter(Boolean);
+}
+
+function addressesIn(clientIp) {
+  return new Set(IP_FIELDS.flatMap((field) => fieldAddresses(clientIp, field)));
+}
+
+// Responses that prove the forwarding itself is misconfigured, so waiting
+// longer can't help. Timeouts and other errors may just be a waking backend.
+function fatalForwardingProblem(res) {
+  if (!res || !res.ok) return null;
+  if (res.type === 'opaqueredirect') return 'the static site answered /api/* with a redirect instead of forwarding it (is the rule a Redirect rather than a Rewrite?)';
+  if (res.text && res.text.includes(FRONTEND_MARKER)) return 'the request for /api/* returned this page\'s own index.html, so the /api/* rewrite rule is missing or ordered after the /* rule';
+  return null;
 }
 
 function stats(values) {
@@ -155,6 +200,7 @@ function isBackendJson(res) {
 
 function describeNonBackend(res) {
   if (!res) return 'no response';
+  if (isBackendJson(res)) return ''; // Nothing to describe: the backend answered.
   if (!res.ok) return res.error;
   if (res.type === 'opaqueredirect') return 'Render returned a redirect instead of forwarding the request';
   if (!res.json) return `status ${res.status}, non-JSON response (${res.contentType || 'no content-type'})`;
@@ -244,17 +290,34 @@ async function testP2() {
   const c = makeChecker();
   const diagnostics = {};
 
+  // Step 1: make sure both cookies exist, so removing them is a real test on
+  // every run, not just when an earlier run left cookies behind.
+  const seed = await request('/sanctum/csrf-cookie');
+  diagnostics.seed = summarise(seed);
+  const seededXsrf = readCookie('XSRF-TOKEN');
+
+  // Step 2: an expiring Set-Cookie must remove them from browser storage, and
+  // the next request must reach the backend without them.
   const cleared = await request('/api/clear-cookies', { method: 'POST', headers: { Accept: 'application/json' } });
   diagnostics.clear = summarise(cleared);
   c.add('Cookie reset request reached the backend', isBackendJson(cleared), describeNonBackend(cleared));
-  c.add('Expiring Set-Cookie removed the old XSRF-TOKEN', readCookie('XSRF-TOKEN') === null, `document.cookie: "${document.cookie}"`);
+  c.add('Expiring Set-Cookie removed the stored XSRF-TOKEN', Boolean(seededXsrf) && readCookie('XSRF-TOKEN') === null,
+    seededXsrf ? `after clearing, document.cookie: "${document.cookie}"` : 'no XSRF-TOKEN was stored by the first /sanctum/csrf-cookie call, so removal could not be tested');
+  const afterClear = await request('/api/echo');
+  diagnostics.afterClear = summarise(afterClear);
+  if (isBackendJson(afterClear)) {
+    const leftover = Object.keys(afterClear.json.cookies || {}).filter((name) => name === 'wf_experiment_session' || name === 'XSRF-TOKEN');
+    c.add('Backend received no test cookies after clearing', leftover.length === 0, leftover.length ? `still received: ${leftover.join(', ')}` : 'including the HttpOnly session cookie');
+  }
 
+  // Step 3: fresh cookies, as a login flow would receive them.
   const csrf = await request('/sanctum/csrf-cookie');
   diagnostics.csrfCookie = summarise(csrf);
   c.add('/sanctum/csrf-cookie returned 204 from the backend', csrf.ok && csrf.status === 204 && csrf.headers['x-experiment-service'] === BACKEND_SERVICE, csrf.ok ? `status ${csrf.status}` : csrf.error);
 
   const xsrf = readCookie('XSRF-TOKEN');
   c.add('Readable XSRF-TOKEN cookie stored for this site', Boolean(xsrf), xsrf ? 'present in document.cookie' : `missing; document.cookie: "${document.cookie}"`);
+  c.add('New XSRF-TOKEN replaced the earlier one', Boolean(xsrf) && xsrf !== seededXsrf, 'each call issues a new random token');
   c.add('HttpOnly session cookie hidden from JavaScript', readCookie('wf_experiment_session') === null, 'wf_experiment_session must not appear in document.cookie');
 
   const echo = await request('/api/echo');
@@ -270,12 +333,28 @@ async function testP2() {
   }
 
   return outcome('P2', c, diagnostics, {
-    summaryPass: 'Both cookies from one 204 response were stored for this site. XSRF-TOKEN is readable, the session cookie is HttpOnly, and both are sent back.',
+    summaryPass: 'Cookies were set, removed by an expiring Set-Cookie, and set again. Both cookies from one 204 response were stored for this site: XSRF-TOKEN is readable, the session cookie is hidden from JavaScript, and both were sent back.',
     notes: ['JavaScript cannot read cookie attributes. Confirm Domain, Secure, HttpOnly and SameSite manually in DevTools → Application → Cookies (see the README).'],
   });
 }
 
 /* ---------- P3: headers and cookies reach the backend ---------- */
+
+function checkSiteHeaders(c, label, h, notes) {
+  const origin = h.origin;
+  const referer = h.referer;
+  if (origin !== undefined) {
+    c.add(`${label}: Origin arrived unchanged (not rewritten to the backend host)`, origin === location.origin, `received "${origin}", expected "${location.origin}"`);
+  }
+  if (referer !== undefined) {
+    c.add(`${label}: Referer arrived with this site's origin`, referer.startsWith(`${location.origin}/`), `received "${referer}"`);
+  }
+  if (origin === undefined && referer === undefined) {
+    c.add(`${label}: Origin or Referer reached the backend`, false, 'neither arrived, so Sanctum could not recognise the request as coming from the SPA');
+  } else if (origin === undefined) {
+    notes.push(`The browser sent no Origin header on the ${label}. Sanctum then relies on Referer, which was checked.`);
+  }
+}
 
 async function testP3() {
   const c = makeChecker();
@@ -318,24 +397,24 @@ async function testP3() {
     c.add('X-XSRF-TOKEN arrived and matches the cookie', post.json.csrf && post.json.csrf.header_matches_cookie === true, JSON.stringify(post.json.csrf));
     c.add('Accept header preserved', (h.accept || '').includes('application/json'), `received "${h.accept || ''}"`);
     c.add('X-Requested-With preserved', h['x-requested-with'] === 'XMLHttpRequest', `received "${h['x-requested-with'] || ''}"`);
-    c.add('Referer arrived with this site\'s origin', (h.referer || '').startsWith(`${location.origin}/`), `received "${h.referer || ''}"`);
-    if (h.origin === undefined) {
-      notes.push('The browser sent no Origin header on this same-origin POST. Sanctum then uses Referer, which was checked above.');
-    } else {
-      c.add('Origin arrived unchanged (not rewritten to the backend host)', h.origin === location.origin, `received "${h.origin}", expected "${location.origin}"`);
-    }
+    // Origin and Referer are added by the browser, not by this page, so each is
+    // judged only if it arrived. Sanctum needs at least one of them to match.
+    checkSiteHeaders(c, 'POST', h, notes);
   }
 
   const get = await request('/api/echo', { headers: { Accept: 'application/json' } });
   diagnostics.get = summarise(get);
   if (c.add('GET reached the backend', isBackendJson(get), describeNonBackend(get))) {
-    const referer = (get.json.headers || {}).referer || '';
-    c.add('Referer arrives on GET requests too', referer.startsWith(`${location.origin}/`), `received "${referer}"`);
+    checkSiteHeaders(c, 'GET', get.json.headers || {}, notes);
   }
   notes.push('Host and X-Forwarded-Host are shown under diagnostics → forwarding. WorkFlow\'s trustHosts setting will need these values.');
 
+  const arrived = ['Cookie', 'X-XSRF-TOKEN', 'Accept', 'X-Requested-With'];
+  const postHeaders = isBackendJson(post) ? post.json.headers || {} : {};
+  if (postHeaders.referer !== undefined) arrived.push('Referer');
+  if (postHeaders.origin !== undefined) arrived.push('Origin');
   return outcome('P3', c, diagnostics, {
-    summaryPass: 'Cookie, X-XSRF-TOKEN, Accept, X-Requested-With, Referer and Origin reached the backend unchanged.',
+    summaryPass: `${arrived.join(', ')} reached the backend unchanged on the POST.`,
     notes,
   });
 }
@@ -367,6 +446,10 @@ async function testP5() {
   const diagnostics = {};
   const realIp = normaliseIp(document.getElementById('real-ip').value);
 
+  if (realIp && !looksLikeIp(realIp)) {
+    return { id: 'P5', status: INCONCLUSIVE, summary: `"${realIp}" isn't an IP address. Enter the address shown by a "what is my IP" search.`, checks: [], notes: [], diagnostics };
+  }
+
   const baseline = await request('/api/echo');
   const spoofed = await request('/api/echo', { headers: FAKE_IP_HEADERS });
   diagnostics.baseline = isBackendJson(baseline) ? baseline.json.client_ip : summarise(baseline);
@@ -380,9 +463,7 @@ async function testP5() {
   const b = baseline.json.client_ip;
   const s = spoofed.json.client_ip;
   const singleSources = ['remote_addr', 'true_client_ip', 'cf_connecting_ip', 'x_real_ip'];
-  const fakeAccepted = Object.entries(s)
-    .filter(([, value]) => FAKE_IPS.some((fake) => String(value ?? '').includes(fake)))
-    .map(([field]) => field);
+  const fakeAccepted = IP_FIELDS.filter((field) => fieldAddresses(s, field).some((ip) => FAKE_IPS.includes(ip)));
   diagnostics.fieldsContainingFakeValues = fakeAccepted;
 
   if (!realIp) {
@@ -416,14 +497,26 @@ async function testP5() {
   diagnostics.realIpEntered = realIp;
   diagnostics.xForwardedForPositionFromRight = { baseline: bPos, withFakeHeaders: sPos };
 
-  const visibleAnywhere = Object.values(b).flat().some((value) => normaliseIp(value) === realIp || String(value ?? '').toLowerCase().includes(realIp));
-  c.add('Your public IP is visible to the backend', visibleAnywhere, visibleAnywhere ? '' : 'not found in any IP header. If your network uses IPv6, check whether you entered the IPv6 or IPv4 address');
-  c.add('At least one source cannot be overridden by the client', trustworthy.length > 0, trustworthy.join('; ') || 'every source containing your address was missing or replaced when fakes were sent');
-
+  const visibleAnywhere = addressesIn(b).has(realIp);
+  diagnostics.trustworthySources = trustworthy;
   const notes = [];
   if (fakeAccepted.length) {
     notes.push(`These fields contained a fake value: ${fakeAccepted.join(', ')}. Laravel must not trust them. Configure trusted proxies to read only the trustworthy source.`);
   }
+
+  if (isLoopbackOrPrivate(realIp)) {
+    return {
+      id: 'P5',
+      status: INCONCLUSIVE,
+      summary: `${realIp} is a loopback or private address. Here the client, proxy and backend share addresses, so this can't establish how a public server sees visitors. The analysis still ran (see diagnostics).`,
+      checks: [],
+      notes,
+      diagnostics,
+    };
+  }
+
+  c.add('Your public IP is visible to the backend', visibleAnywhere, visibleAnywhere ? 'exact match' : 'not found in any IP source. If your network uses IPv6, check whether you entered the IPv6 or IPv4 address');
+  c.add('At least one source cannot be overridden by the client', trustworthy.length > 0, trustworthy.join('; ') || 'every source containing your address was missing or replaced when fakes were sent');
   return outcome('P5', c, diagnostics, { summaryPass: `Trustworthy source: ${trustworthy.join('; ')}.`, notes });
 }
 
@@ -435,13 +528,12 @@ function classifyAttempt(res) {
   return 'non-backend-response';
 }
 
-async function runWakeSequence(firstAttempt) {
+async function runWakeSequence(firstAttempt, { limitMs = 4 * 60 * 1000 } = {}) {
   const attempts = [];
   const started = performance.now();
-  const limitMs = 4 * 60 * 1000;
   let res = firstAttempt;
   while (true) {
-    if (!res) res = await request(`/api/ping?wake=${Date.now()}`, { timeoutMs: 120000 });
+    if (!res) res = await request(`/api/ping?wake=${Date.now()}`, { timeoutMs: Math.min(90000, limitMs) });
     attempts.push({
       attempt: attempts.length + 1,
       outcome: classifyAttempt(res),
@@ -452,20 +544,26 @@ async function runWakeSequence(firstAttempt) {
       preview: res.text ? res.text.slice(0, 200) : '',
       uptimeSeconds: isBackendJson(res) ? res.json.uptime_seconds : null,
     });
-    setStatus(`Wake test: attempt ${attempts.length}, ${classifyAttempt(res)}, ${Math.round((performance.now() - started) / 1000)} s elapsed…`);
+    setStatus(`Waiting for the backend: attempt ${attempts.length}, ${classifyAttempt(res)}, ${Math.round((performance.now() - started) / 1000)} s elapsed…`);
+    const fatal = fatalForwardingProblem(res);
+    if (fatal) {
+      return { id: 'P6', status: FAIL, summary: `Stopped early: ${fatal}.`, checks: [], notes: [], diagnostics: { attempts }, reachedBackend: false };
+    }
     if (isBackendJson(res) || performance.now() - started > limitMs) break;
     res = null;
     await sleep(5000);
   }
   const totalSeconds = Math.round((performance.now() - started) / 1000);
-  const success = attempts[attempts.length - 1].outcome === 'backend-json';
-  const finalUptime = attempts[attempts.length - 1].uptimeSeconds;
+  const first = attempts[0];
+  const last = attempts[attempts.length - 1];
+  const success = last.outcome === 'backend-json';
+  const finalUptime = last.uptimeSeconds;
   const diagnostics = { attempts, totalSeconds };
 
   if (!success) {
-    return { id: 'P6', status: FAIL, summary: `The backend did not respond with JSON within 4 minutes (${attempts.length} attempts).`, checks: [], notes: [], diagnostics };
+    return { id: 'P6', status: FAIL, summary: `The backend did not respond with JSON within ${Math.round(limitMs / 1000)} s (${attempts.length} attempts).`, checks: [], notes: [], diagnostics, reachedBackend: false };
   }
-  if (finalUptime !== null && finalUptime > 300) {
+  if (finalUptime > 300) {
     return {
       id: 'P6',
       status: INCONCLUSIVE,
@@ -473,6 +571,20 @@ async function runWakeSequence(firstAttempt) {
       checks: [],
       notes: [],
       diagnostics,
+      reachedBackend: true,
+    };
+  }
+  // A recent start alone isn't evidence of sleep: a deploy or restart also
+  // resets uptime. A real wake-up makes the first request wait or fail.
+  if (attempts.length === 1 && first.ms <= 3000) {
+    return {
+      id: 'P6',
+      status: INCONCLUSIVE,
+      summary: `The backend answered at once (${first.ms} ms) although it started ${finalUptime} s ago. That shows a recent restart or deploy, not a wake-up from sleep.`,
+      checks: [],
+      notes: [],
+      diagnostics,
+      reachedBackend: true,
     };
   }
   const before = attempts.slice(0, -1).map((a) => a.outcome);
@@ -486,12 +598,14 @@ async function runWakeSequence(firstAttempt) {
     checks: [],
     notes: ['WorkFlow\'s API client must treat any response without the expected JSON, or a timeout, as "waking up" and retry, using the pattern recorded here.'],
     diagnostics,
+    reachedBackend: true,
   };
 }
 
-async function evaluateP6FromProbe(probe) {
-  if (!isBackendJson(probe)) return runWakeSequence(probe);
+// Used when the run's first request already returned backend JSON.
+function evaluateP6FromProbe(probe) {
   const uptime = probe.json.uptime_seconds;
+  const diagnostics = { probe: summarise(probe), uptimeSeconds: uptime };
   if (uptime <= 300 && probe.ms > 3000) {
     return {
       id: 'P6',
@@ -499,17 +613,14 @@ async function evaluateP6FromProbe(probe) {
       summary: `Wake-up observed: the first request waited ${Math.round(probe.ms / 1000)} s and then returned the backend JSON (container up for ${uptime} s).`,
       checks: [],
       notes: [],
-      diagnostics: { probe: summarise(probe), uptimeSeconds: uptime },
+      diagnostics,
+      reachedBackend: true,
     };
   }
-  return {
-    id: 'P6',
-    status: INCONCLUSIVE,
-    summary: `The backend was already awake (running for ${uptime} s). To test waking, close every tab using it, wait at least 16 minutes, then press "Run wake test (P6)" first.`,
-    checks: [],
-    notes: [],
-    diagnostics: { probe: summarise(probe), uptimeSeconds: uptime },
-  };
+  const summary = uptime <= 300
+    ? `The backend started ${uptime} s ago but answered at once (${probe.ms} ms): a recent restart or deploy, not an observed wake-up. To test waking, close every tab using it, wait at least 16 minutes, then press "Run wake test (P6)" first.`
+    : `The backend was already awake (running for ${uptime} s). To test waking, close every tab using it, wait at least 16 minutes, then press "Run wake test (P6)" first.`;
+  return { id: 'P6', status: INCONCLUSIVE, summary, checks: [], notes: [], diagnostics, reachedBackend: true };
 }
 
 /* ---------- P7: latency ---------- */
@@ -544,6 +655,7 @@ async function testP7() {
     forwarded.push(res.ms);
     serverMs.push(res.json.server_ms);
   }
+  diagnostics.measuredFrom = location.origin;
   diagnostics.forwardedMs = stats(forwarded);
   diagnostics.backendProcessingMs = stats(serverMs);
 
@@ -671,12 +783,35 @@ async function runOne(id, fn) {
 async function runAll() {
   setBusy(true);
   renderEnvironment();
-  setStatus('Contacting the backend. If it is asleep this can take about a minute…');
+  for (const test of TESTS) delete results[test.id];
+  renderResults();
+  setStatus('Contacting the backend through /api. If it is asleep this can take about a minute…');
   // The first request doubles as the P6 probe: if the backend was asleep,
-  // this is where the wake-up happens.
-  const probe = await request(`/api/ping?probe=${Date.now()}`, { timeoutMs: 120000 });
-  const p6 = evaluateP6FromProbe(probe);
-  await runOne('P6', () => p6);
+  // this is where the wake-up happens. The whole wait is capped at 120 s, and
+  // a clearly misconfigured rewrite stops it immediately.
+  const probe = await request(`/api/ping?probe=${Date.now()}`, { timeoutMs: 90000 });
+  await runOne('P6', async () => (isBackendJson(probe) ? evaluateP6FromProbe(probe) : runWakeSequence(probe, { limitMs: 120000 })));
+
+  if (!results.P6.reachedBackend) {
+    const reason = results.P6.summary;
+    results.P1 = {
+      id: 'P1',
+      status: FAIL,
+      summary: `No request reached the backend through the forwarding. ${reason}`,
+      checks: [],
+      notes: ['Open the backend\'s own /up URL directly. If it answers, the static site\'s rewrite rules are the problem. If it doesn\'t, the backend itself is down or still deploying.'],
+      diagnostics: results.P6.diagnostics,
+    };
+    results.P6 = { id: 'P6', status: INCONCLUSIVE, summary: 'Not determined: the backend was never reached (see P1).', checks: [], notes: [], diagnostics: results.P6.diagnostics };
+    for (const id of ['P2', 'P3', 'P4', 'P5', 'P7']) {
+      results[id] = { id, status: INCONCLUSIVE, summary: 'Not run: the backend could not be reached through the forwarding (see P1).', checks: [], notes: [], diagnostics: {} };
+    }
+    renderResults();
+    setStatus('Stopped early: the backend was not reachable through /api. See P1.');
+    setBusy(false);
+    return;
+  }
+
   const order = [['P1', testP1], ['P2', testP2], ['P3', testP3], ['P4', testP4], ['P5', testP5], ['P7', testP7]];
   for (const [id, fn] of order) {
     setStatus(`Running ${id}…`);
