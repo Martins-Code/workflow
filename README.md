@@ -4,6 +4,8 @@ A multi-tenant project and workflow management application for organisations tha
 
 > **Status: under development.** The planning phase is complete. No application code exists yet, and nothing is deployed. See [current status](#current-status).
 
+**📓 [Development journal](docs/00-development-journal.md)**: the dated record of how WorkFlow is being designed, built and tested, including the decisions I changed, the experiments that are still open, and why.
+
 ---
 
 ## The problem
@@ -65,7 +67,7 @@ The frontend and backend are separate applications in one repository, intended t
 
 | Document | Contents |
 |---|---|
-| [00 Documentation guide](docs/00-documentation-guide.md) | How documentation is written and kept accurate |
+| [00 Development journal](docs/00-development-journal.md) | Dated record of decisions, experiments and progress. **Start here for the history** |
 | [01 Product requirements](docs/01-product-requirements.md) | Users, functional requirements, scope, decisions D1–D13, acceptance criteria |
 | [02 System architecture](docs/02-system-architecture.md) | Architecture decision records, multi-tenancy, security, frontend, hosting |
 | [03 Database design](docs/03-database-design.md) | Schema, constraints, indexes, PostgreSQL design notes |
@@ -73,7 +75,7 @@ The frontend and backend are separate applications in one repository, intended t
 | [05 API specification](docs/05-api-specification.md) | The planned REST contract |
 | [06 Testing strategy](docs/06-testing-strategy.md) | Test plan, tenant isolation suite, execution status |
 | [07 Development roadmap](docs/07-development-roadmap.md) | Phases, current status, Git workflow, next steps |
-| [08 Development journal](docs/08-development-journal.md) | Dated record of decisions, experiments and progress |
+| [Documentation guide](docs/documentation-guide.md) | How documentation is written and kept accurate |
 
 ## Engineering investigations
 
@@ -107,7 +109,7 @@ These are planned for the next phase and **don't exist yet**:
 | 2. Foundation and hosting validation | In progress. The Render forwarding experiment is built and checked locally. Render deployment and application scaffolding haven't started |
 | 3–12 | Not started |
 
-The full plan is in the [roadmap](docs/07-development-roadmap.md), and the history is in the [development journal](docs/08-development-journal.md).
+The full plan is in the [roadmap](docs/07-development-roadmap.md), and the history is in the [development journal](docs/00-development-journal.md).
 
 ## Running WorkFlow locally
 

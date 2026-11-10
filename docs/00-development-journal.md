@@ -1,8 +1,8 @@
-# 08 — Development Journal
+# 00 — Development Journal
 
 **Status:** Append-only record, started 2026-11-10 · **Last entry:** 2026-11-10
 
-A chronological record of how WorkFlow is designed, built, tested and deployed. Each entry describes what I was working on, what I considered, what I decided, what happened, and what's still open. Entries are never rewritten. If an earlier entry turns out to be wrong, a later entry says so. The rules are in the [documentation guide](00-documentation-guide.md#8-the-development-journal).
+A chronological record of how WorkFlow is designed, built, tested and deployed. Each entry describes what I was working on, what I considered, what I decided, what happened, and what's still open. Entries are never rewritten. If an earlier entry turns out to be wrong, a later entry says so. The rules are in the [documentation guide](documentation-guide.md#8-the-development-journal).
 
 The first entries were written on 2026-11-10 from the evidence available then: the commit history and the Phase 1 documents. Where a document's own date differs from its commit date, both are given.
 
@@ -188,7 +188,7 @@ I approved the Phase 1 documents, including D12 (PostgreSQL 18 on Neon) and D13 
 
 **Documentation changes:**
 - Rewrote the root README, which was a one-line UTF-16 file.
-- Added the [documentation guide](00-documentation-guide.md) and this journal.
+- Added the [documentation guide](documentation-guide.md) and this journal.
 - Added status lines to every document, saying what is approved, implemented, tested or deployed. Currently that's approved only.
 - Rewrote the documents in my own engineering voice, and removed showcase-oriented wording.
 - Corrected stale content: D13 is approved, the experiment uses plain PHP rather than a minimal Laravel service, and P1 includes `PUT`.
@@ -202,3 +202,27 @@ I approved the Phase 1 documents, including D12 (PostgreSQL 18 on Neon) and D13 
 3. Decide on corrections C1–C5.
 4. Deploy the experiment to Render. That's also the Docker image's first build.
 5. Run P1–P7 there.
+
+---
+
+## 2026-11-10 — Documentation structure finalised
+
+**Working on:** settling the documentation layout before going back to the experiment.
+
+**Changes:**
+- Renamed the journal from `08-development-journal.md` to `00-development-journal.md`, so the project's history sorts first in `docs/`.
+- Renamed the guide from `00-documentation-guide.md` to an unnumbered `documentation-guide.md`, because it describes the documents rather than the product.
+- The seven specification documents keep their numbers.
+- Updated every link. The root README now links the journal prominently.
+- In the earlier entries, only link targets changed, to follow the renames. Their content is unchanged.
+
+**Where things stand:**
+
+| Category | Status |
+|---|---|
+| Proposed architecture | Separate Render services, with the frontend static site forwarding `/api` and `/sanctum` to a Docker backend (D7, ADR-09). Approved, **not validated** |
+| Implemented and tested locally | Only the forwarding experiment, against a Node.js stand-in for Render. No WorkFlow application code exists |
+| Validated on Render | Nothing yet |
+| Unresolved | Whether Render's forwarding preserves cookies, headers and bodies. Whether the experiment's Docker image builds and fits the free instance. Corrections C1–C5 to the test harness, which are being made next |
+
+**Next:** apply corrections C1–C5 on `spike/render-proxy-test`, re-run the local checks, and record the results.

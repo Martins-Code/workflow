@@ -2,7 +2,7 @@
 
 **Status:** Approved on 2026-11-10 (Phase 1). This describes planned behaviour; none of it is implemented yet · **Last reviewed:** 2026-11-10 · **Applies to:** WorkFlow Version 1
 
-Related: [Documentation guide](00-documentation-guide.md) · [Architecture](02-system-architecture.md) · [Database](03-database-design.md) · [Permissions](04-permissions-matrix.md) · [API](05-api-specification.md) · [Testing](06-testing-strategy.md) · [Roadmap](07-development-roadmap.md) · [Journal](08-development-journal.md)
+Related: [Documentation guide](documentation-guide.md) · [Architecture](02-system-architecture.md) · [Database](03-database-design.md) · [Permissions](04-permissions-matrix.md) · [API](05-api-specification.md) · [Testing](06-testing-strategy.md) · [Roadmap](07-development-roadmap.md) · [Journal](00-development-journal.md)
 
 ---
 
@@ -31,7 +31,7 @@ I'm building WorkFlow as a personal project, with a public demonstration deploym
 
 ## 2. Confirmed decisions
 
-I confirmed D1–D11 on 2026-11-05, including D7's low-cost direction. By 2026-11-08, Aiven had stopped offering new free MySQL services, so D7's database provider changed, and I added D12 and D13. On 2026-11-10 I confirmed separate frontend and backend services for D7, and approved D12 and D13 with the rest of Phase 1. The history of each change is in the [development journal](08-development-journal.md).
+I confirmed D1–D11 on 2026-11-05, including D7's low-cost direction. By 2026-11-08, Aiven had stopped offering new free MySQL services, so D7's database provider changed, and I added D12 and D13. On 2026-11-10 I confirmed separate frontend and backend services for D7, and approved D12 and D13 with the rest of Phase 1. The history of each change is in the [development journal](00-development-journal.md).
 
 **D7 is approved but not validated.** It depends on Render's static-site forwarding, which is being tested in the [Render forwarding experiment](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy). The hosting providers named in D7 and D12 are confirmed only once the Phase 2 hosting validation passes.
 

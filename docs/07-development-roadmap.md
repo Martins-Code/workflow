@@ -2,7 +2,7 @@
 
 **Status:** Approved plan (Phase 1, 2026-11-10). Phase status is maintained in section 1 · **Last reviewed:** 2026-11-10
 
-Each phase ends with something working and tested, merged into a stable `main`. Sizes are relative: **S** small, **M** medium, **L** large. I've left out calendar estimates, as they depend on the time I can give the project. The detailed history behind each phase is in the [development journal](08-development-journal.md).
+Each phase ends with something working and tested, merged into a stable `main`. Sizes are relative: **S** small, **M** medium, **L** large. I've left out calendar estimates, as they depend on the time I can give the project. The detailed history behind each phase is in the [development journal](00-development-journal.md).
 
 ---
 
@@ -264,7 +264,7 @@ A pull request can merge when:
 
 1. Its scope matches one branch purpose and is small enough to review.
 2. Tests from [the testing strategy, section 9](06-testing-strategy.md#9-acceptance-criteria-for-tests) are in place and CI passes.
-3. The documentation review in [the documentation guide](00-documentation-guide.md#5-updating-documentation-when-something-changes) is done: affected documents are updated, and a journal entry is added for meaningful milestones.
+3. The documentation review in [the documentation guide](documentation-guide.md#5-updating-documentation-when-something-changes) is done: affected documents are updated, and a journal entry is added for meaningful milestones.
 4. No secrets, debug output or commented-out code are in the diff.
 5. I can explain what changed and why.
 
@@ -282,7 +282,7 @@ This project is also how I'm deepening my engineering knowledge, so a feature I 
 6. A practical example from WorkFlow.
 7. A short summary of the reasoning I'd give another engineer.
 
-Architectural decisions carry this in their ADR in [the architecture document](02-system-architecture.md). Everything else goes in the "What I learned" part of the relevant [journal](08-development-journal.md) entry.
+Architectural decisions carry this in their ADR in [the architecture document](02-system-architecture.md). Everything else goes in the "What I learned" part of the relevant [journal](00-development-journal.md) entry.
 
 | Area | Topics to cover as they arise |
 |---|---|

@@ -1,8 +1,13 @@
-# 00 — Documentation Guide
+# Documentation Guide
 
 **Status:** In use since 2026-11-10 · **Last reviewed:** 2026-11-10
 
-This guide is the standard for every document in the WorkFlow repository: the root README, the numbered documents in `docs/`, experiment READMEs, and the development journal. I wrote it so the documentation stays accurate as the project changes, and so nobody, including me in six months, has to guess which document to trust.
+This guide is the standard for every document in the WorkFlow repository: the root README, the documents in `docs/`, experiment READMEs, and the development journal. I wrote it so the documentation stays accurate as the project changes, and so nobody, including me in six months, has to guess which document to trust.
+
+**File naming:**
+- The journal is `00-development-journal.md`, so it sorts first: it's where the project's story starts.
+- The seven specification documents keep their numbers, `01`–`07`.
+- This guide is unnumbered, because it describes the documents rather than the product.
 
 ---
 
@@ -13,7 +18,8 @@ Each kind of fact has exactly one home. Other documents link to it rather than r
 | Document | Purpose | Single source of truth for |
 |---|---|---|
 | [`README.md`](../README.md) (repository root) | Introduces the project: what it is, current status, how to find everything else | Nothing in depth. It summarises and links |
-| [`00-documentation-guide.md`](00-documentation-guide.md) | How documentation is written and maintained | These rules |
+| [`00-development-journal.md`](00-development-journal.md) | The chronological record of what happened and why | History |
+| [`documentation-guide.md`](documentation-guide.md) | How documentation is written and maintained | These rules |
 | [`01-product-requirements.md`](01-product-requirements.md) | What WorkFlow must do, for whom, and the product-level decisions (D1–D13) | Requirements, scope, metric definitions, release acceptance criteria |
 | [`02-system-architecture.md`](02-system-architecture.md) | How WorkFlow is built and why: architecture decision records (ADRs), tenancy design, frontend, security, hosting | Architecture decisions, risks, hosting strategy |
 | [`03-database-design.md`](03-database-design.md) | Tables, constraints, indexes and PostgreSQL-specific rules | The schema |
@@ -21,16 +27,15 @@ Each kind of fact has exactly one home. Other documents link to it rather than r
 | [`05-api-specification.md`](05-api-specification.md) | The REST contract: endpoints, request and response shapes, errors | API contracts |
 | [`06-testing-strategy.md`](06-testing-strategy.md) | How WorkFlow is tested, and what has actually been executed | Test plan and execution status |
 | [`07-development-roadmap.md`](07-development-roadmap.md) | The order of work, phase status, Git workflow, definition of done | Current project status and next steps |
-| [`08-development-journal.md`](08-development-journal.md) | The chronological record of what happened and why | History |
 | `experiments/<name>/README.md` | One investigation: question, method, results and conclusion | That experiment's details and raw results |
 
 ```mermaid
 flowchart TB
     Root["Root README<br/>overview and status"]
-    Guide["00 Documentation guide"]
+    Guide["Documentation guide"]
     Spec["01–06<br/>requirements, architecture, database,<br/>permissions, API, testing"]
     Roadmap["07 Roadmap<br/>phase status and next steps"]
-    Journal["08 Development journal<br/>chronological history"]
+    Journal["00 Development journal<br/>chronological history"]
     Exp["Experiment READMEs<br/>on spike branches"]
 
     Root --> Spec
@@ -149,7 +154,7 @@ An experiment answers one question that would be expensive to get wrong later, s
 
 ## 8. The development journal
 
-The [journal](08-development-journal.md) is append-only:
+The [journal](00-development-journal.md) is append-only:
 
 - Entries are dated and in chronological order. New entries go at the end.
 - **Past entries aren't rewritten** to make the history look cleaner. If something in an earlier entry turns out to be wrong, a new entry says so and explains why.
