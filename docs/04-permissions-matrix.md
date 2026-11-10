@@ -1,6 +1,6 @@
 # 04 — Permissions Matrix
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Depends on:** confirmed decisions D1, D2, D3, D9, D11
+**Status:** Approved design (Phase 1, 2026-11-10). No policy is implemented yet · **Last reviewed:** 2026-11-10 · **Depends on:** confirmed decisions D1, D2, D3, D9, D11
 
 ---
 
@@ -105,7 +105,7 @@ The demo mailbox (D13) is deliberately public, but only in demo mode, and it onl
 
 ---
 
-## 4. Conflicts found in the brief and how they are resolved
+## 4. Conflicts in my original brief and how I resolved them
 
 | # | Conflict | Resolution |
 |---|---|---|

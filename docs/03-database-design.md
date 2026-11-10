@@ -1,6 +1,6 @@
 # 03 — Database Design
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Engine:** PostgreSQL 18, UTF-8 (D12)
+**Status:** Approved design (Phase 1, 2026-11-10). No migrations exist yet · **Last reviewed:** 2026-11-10 · **Engine:** PostgreSQL 18, UTF-8 (D12)
 
 ---
 
@@ -173,7 +173,7 @@ ALTER TABLE tasks ADD CONSTRAINT fk_tasks_project
   REFERENCES projects (workspace_id, id);
 ```
 
-Now that bad row is **impossible at the database level**, even if the application has a bug. This is a strong feature to discuss in an interview, as many multi-tenant applications never add it.
+Now that bad row is **impossible at the database level**, even if the application has a bug. Many multi-tenant applications rely on application code alone for this guarantee.
 
 ### Why nullable composite references use `RESTRICT`
 

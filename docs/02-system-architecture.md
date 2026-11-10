@@ -1,6 +1,6 @@
 # 02 — System Architecture
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-10
+**Status:** Approved design (Phase 1, 2026-11-10). Nothing here is implemented yet. **The hosting arrangement in section 10 is unverified**: it depends on the Render forwarding experiment · **Last reviewed:** 2026-11-10
 
 Decision references such as **D5** point to [01 — Product Requirements](01-product-requirements.md#2-confirmed-decisions).
 
@@ -35,8 +35,8 @@ flowchart TB
 | Component | Version | Note |
 |---|---|---|
 | Laravel | 13 | Latest major confirmed. Security fixes until Q1 2028. Check for a newer release when scaffolding in Phase 2 |
-| PHP | 8.3 | Laravel 13's minimum. Already installed in your Laragon |
-| PostgreSQL | 18 | Latest major release, supported until November 2030. Used locally, in CI and on Neon (D12). Laravel 13 supports PostgreSQL 10 and later. Your Laragon MySQL is no longer used by WorkFlow |
+| PHP | 8.3 | Laravel 13's minimum. Installed locally through Laragon |
+| PostgreSQL | 18 | Latest major release, supported until November 2030. Used locally, in CI and on Neon (D12). Laravel 13 supports PostgreSQL 10 and later. Laragon's MySQL is no longer used by WorkFlow |
 | Node | 22 | Already installed. Used only to build the frontend |
 
 ---
@@ -51,11 +51,11 @@ flowchart TB
 | One schema per tenant | Stronger | Migrations per tenant, connection switching | Too heavy for this scale |
 | One database per tenant | Strongest | Provisioning, backups and costs per tenant | Justified only by contractual requirements |
 
-Your proposal is the right choice for this project. Its weakness is that **a single forgotten `WHERE` clause becomes a data breach.** The design therefore doesn't depend on developers remembering. It adds layers that fail safely (section 3) and uses composite foreign keys, so the database itself refuses cross-tenant links ([database design, section 2](03-database-design.md#2-how-workspace-identifiers-work)).
+A shared database is the right choice for this project. Its weakness is that **a single forgotten `WHERE` clause becomes a data breach.** The design therefore doesn't depend on developers remembering. It adds layers that fail safely (section 3) and uses composite foreign keys, so the database itself refuses cross-tenant links ([database design, section 2](03-database-design.md#2-how-workspace-identifiers-work)).
 
 **Trade-offs accepted:**
 
-- You cannot restore a single tenant from a backup without extra tooling.
+- A single tenant can't be restored from a backup without extra tooling.
 - One heavy tenant can affect the others.
 - Extracting a tenant later requires a data export.
 
@@ -82,7 +82,7 @@ The URL approach also gives shareable frontend links such as `/w/acme/projects/1
 
 ### ADR-04: Fixed roles in code (D11)
 
-Roles are PHP enums, and rules live in Laravel policies. No permissions package or `roles` table is used. There are only three workspace roles and two project roles, and a reader can follow the policies directly, which is better for a project you must explain.
+Roles are PHP enums, and rules live in Laravel policies. No permissions package or `roles` table is used. There are only three workspace roles and two project roles, and a reader can follow the policies directly, which keeps every rule easy to trace.
 
 ### ADR-05: Action classes for business operations
 
@@ -110,27 +110,27 @@ workflow/
 
 1. **What it is:** the React build runs as a Render static site, and Laravel runs as a separate Render web service. The static site forwards `/api` and `/sanctum` requests to the backend through Render's rewrite rules.
 2. **What problem it solves:** Render's free domains are on the Public Suffix List, so a browser treats the two services as different sites. Calling the API directly would make Sanctum's session cookie a blocked third-party cookie, and leave the CSRF cookie unreadable.
-3. **Why we're choosing it:** it keeps your requirement of separately deployed services, costs nothing, and keeps cookie authentication first-party and secure. As a bonus, the frontend never sleeps.
+3. **Why I chose it:** it keeps my requirement of separately deployed services, costs nothing, and keeps cookie authentication first-party and secure. As a bonus, the frontend never sleeps.
 4. **Alternatives and trade-offs:**
    - One combined container: free and certain, but one deployment.
    - A purchased domain with subdomains: Sanctum's standard setup, but it costs money.
    - Bearer tokens: free, but weaker against XSS.
    - Cross-site cookies: unreliable across browsers.
 
-   The forwarding's handling of cookies and headers is undocumented, so it's validated first in Phase 2, with the alternatives as explicit fallbacks.
+   Render doesn't document how the forwarding handles cookies and headers, so I'm validating it first in Phase 2, with the alternatives as explicit fallbacks.
 5. **How it works in WorkFlow:** section 10 covers the rewrite rules, cookie settings, deployments and resources.
-6. **How to explain it in an interview:** see the end of section 10.
+6. **Status:** approved, **not yet validated**. Validation is in progress in the [Render forwarding experiment](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy). The rationale is summarised at the end of section 10.
 
 ### ADR-10: PostgreSQL instead of MySQL (D12)
 
 1. **What it is:** PostgreSQL is an open-source relational database, like MySQL. Both store tables, enforce foreign keys and run SQL, but they differ in details that matter to this design.
 2. **What problem it solves:** free managed MySQL is no longer available to new users, and the remaining MySQL option costs $5 a month. Free PostgreSQL hosting is still available.
-3. **Why we're choosing it:** every database-level tenant safeguard still works: composite foreign keys, `CHECK` constraints and row locks. Two parts become simpler. Partial unique indexes replace the MySQL generated-column workaround for invitations, and schema changes run inside transactions, so a failed migration rolls back cleanly. Laravel supports PostgreSQL as a first-class database, so no extra abstraction layer is needed.
+3. **Why I chose it:** every database-level tenant safeguard still works: composite foreign keys, `CHECK` constraints and row locks. Two parts become simpler. Partial unique indexes replace the MySQL generated-column workaround for invitations, and schema changes run inside transactions, so a failed migration rolls back cleanly. Laravel supports PostgreSQL as a first-class database, so no extra abstraction layer is needed.
 4. **Alternatives and trade-offs:** paying for Aiven's MySQL Developer plan keeps MySQL, but adds a recurring cost. Free MySQL-compatible services were rejected because they behave differently from real MySQL. SQLite has no network server, and its locking and constraint behaviour don't represent a hosted multi-user app. PostgreSQL's costs are its learning curve: case-sensitive text comparison, foreign keys that don't create their own indexes, and transactions that stop working after an error until rolled back.
 5. **How it works in WorkFlow:** the same PostgreSQL 18 runs locally on Windows, in CI and on Neon. Migrations use Laravel's schema builder, with a few short raw SQL statements for features the builder doesn't document, such as the partial index. See [database design, section 7](03-database-design.md#7-postgresql-design-notes).
-6. **How to explain it in an interview:**
+6. **In short:**
 
-> "The design depends on database-enforced tenant constraints, so the engine had to support composite foreign keys, check constraints and row locking. When free MySQL hosting ended, I evaluated PostgreSQL against those requirements before switching. It met all of them, and partial unique indexes and transactional migrations made parts of the design simpler. I run the same major version locally, in CI and in production, so tests exercise the real behaviour."
+> The design depends on database-enforced tenant constraints, so the engine had to support composite foreign keys, check constraints and row locking. When free MySQL hosting ended, I evaluated PostgreSQL against those requirements before switching. It met all of them, and partial unique indexes and transactional migrations made parts of the design simpler. The plan is to run the same major version locally, in CI and in the hosted database, so tests exercise the real behaviour.
 
 ### ADR-11: No permanent queue worker in V1
 
@@ -147,19 +147,19 @@ workflow/
 
    The cost of running jobs synchronously is that this work adds a little time to the request, and a failure isn't retried automatically. It's logged instead.
 5. **How it works in WorkFlow:** notifications are created after the database transaction commits, within the same request. Code that could later be queued is still written as queueable job classes, with `QUEUE_CONNECTION=sync`. Switching to a real queue and worker, for example when real email is enabled on paid hosting, is a configuration change.
-6. **How to explain it in an interview:**
+6. **In short:**
 
-> "I sized background processing to the actual workload. V1's side effects are cheap database writes, so they run synchronously after commit. That avoids a permanent worker on a 512 MB free instance and lets the serverless database sleep. The jobs are still queueable classes, so adding a worker later is configuration, not a rewrite."
+> I sized background processing to the actual workload. V1's side effects are cheap database writes, so they run synchronously after commit. That avoids a permanent worker on a 512 MB free instance and lets the serverless database sleep. The jobs are still queueable classes, so adding a worker later is a configuration change, not a rewrite.
 
-### Not recommended: changing the approved stack
+### Stack review
 
-I reviewed the stack and recommend **no replacements**. The one trade-off worth knowing: a JavaScript frontend has no compile-time checking of API response shapes. JSDoc on the API layer and tests against realistic mock responses reduce this risk.
+I reviewed the stack and kept it unchanged. The one trade-off worth noting is that a JavaScript frontend has no compile-time checking of API response shapes. JSDoc on the API layer, and tests against realistic mock responses, reduce this risk.
 
 ---
 
 ## 3. Multi-tenancy design
 
-### The nine questions from the brief
+### Nine questions the tenancy design must answer
 
 | # | Question | Answer |
 |---|---|---|
@@ -275,7 +275,7 @@ backend/app/
 
 **Request flow:** Route → middleware → Form Request → Policy → Controller → Action → Models → API Resource.
 
-Authentication uses small hand-written controllers around Laravel's password and session features, so you can understand each step. Fortify would save time but hides the flows you want to learn.
+Authentication uses small hand-written controllers around Laravel's password and session features, so every step is visible in the codebase. Fortify would save time, but hides flows I want to own and understand.
 
 ---
 
@@ -447,8 +447,8 @@ Having authentication doesn't make the system secure, and these controls don't e
 | **R9** | Activity table grows quickly | Low | Low | Indexed by workspace and date. Archiving can be added later |
 | **R10** | Scope creep delays completion | High | High | Section 4 of the requirements controls scope. New ideas go to the postponed list |
 | **R11** | Public demo abused for spam or offensive content | Medium | Medium | Mail disabled for demo accounts, rate limits, nightly reset |
-| **R12** | AI-generated code that you cannot explain | High for interviews | Medium | Small pull requests that you review, with key concepts explained at each phase |
-| **R13** | A recruiter meets the one-minute wake-up, or a slow free-tier response, and leaves | Medium | High | The frontend loads instantly because it never sleeps. Clear waking message, README warning, video and screenshots as backup. No keep-alive tricks |
+| **R12** | Generated or copied code is merged without being fully understood | High | Medium | Small pull requests that I review line by line. Key concepts documented as they're introduced |
+| **R13** | A demo visitor meets the one-minute wake-up, or a slow free-tier response, and leaves | Medium | High | The frontend loads instantly because it never sleeps. Clear waking message, README warning, video and screenshots as backup. No keep-alive tricks |
 | **R14** | Render free plan rejects something the design needs, such as the Docker image's memory use | High | Medium | Phase 2 validation before anything depends on it, with fallbacks in section 10 |
 | **R15** | Neon's 100 compute-hours a month run out, suspending the database until the next month | Medium | Low | No queue worker polling the database (ADR-11). Compute capped at 0.25 units. `robots.txt` blocks crawlers. Aiven fallback |
 | **R16** | GitHub disables scheduled workflows after 60 days without repository activity, stopping resets | Medium | High after active development | Runbook to re-enable. Reset is also manually triggerable. Delayed runs are acceptable |
@@ -456,7 +456,7 @@ Having authentication doesn't make the system secure, and these controls don't e
 | **R18** | Wrong client IP behind the platform proxy breaks or weakens IP rate limits | Medium | Medium | Verify in Phase 2. Sensitive limits also key on email or user, not IP alone |
 | **R19** | Provider changes or ends a free tier, as Aiven did for MySQL | Medium | Medium | Standard Docker and PostgreSQL, no provider-specific code, seeders recreate data, named fallbacks |
 | **R20** | PostgreSQL differences cause bugs: case-sensitive email matching, unindexed foreign keys, transactions stuck after an error | Medium | Medium | Tests for each behaviour in [the testing strategy](06-testing-strategy.md#postgresql-specific-tests), and a guard test for unindexed foreign keys |
-| **R21** | Render's rewrite forwarding drops cookies or headers, or adds too much latency (about 400 ms reported) | High | Medium | Proxy validation is the first Phase 2 task. Options A–C in section 10 need your decision if it fails |
+| **R21** | Render's rewrite forwarding drops cookies or headers, or adds too much latency (about 400 ms reported) | High | Medium | Proxy validation is the first Phase 2 task. If it fails, choosing between options A–C in section 10 is a new, recorded decision |
 | **R22** | Signed email links fail because the backend sees a different hostname behind the proxy | Medium | Medium | Relative signed URLs, with a test |
 
 ---
@@ -514,11 +514,13 @@ The browser only ever talks to `workflow.onrender.com`, and Render forwards API 
 
 **Render's docs** say a rewrite destination can be "a full, publicly accessible URL", but don't describe how requests are proxied. **Community threads** recommend this rewrite for `/api` and report it working. One report measured API calls at about 400 ms through the rewrite against 40 ms directly. **Nothing found confirms cookies, POST bodies or headers.**
 
-So **the first task of Phase 2 is a proxy validation check** against a minimal Laravel service:
+So **the first task of Phase 2 is a forwarding validation experiment**. It uses a minimal plain-PHP echo service rather than Laravel, because forwarding is an HTTP-level question. It lives on the `spike/render-proxy-test` branch, which is never merged into `main`: see the [experiment README](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy).
+
+**Current state:** the experiment has been built and checked locally against a Node.js stand-in for Render. **It hasn't been deployed to Render, and its Docker image hasn't been built yet.** Local results prove the test harness works. They say nothing about Render's behaviour.
 
 | # | Must be true |
 |---|---|
-| P1 | `GET`, `POST`, `PATCH` and `DELETE` requests with JSON bodies arrive intact |
+| P1 | `GET`, `POST`, `PUT`, `PATCH` and `DELETE` requests with JSON bodies arrive intact |
 | P2 | `Set-Cookie` reaches the browser, and cookies are stored for the frontend's host |
 | P3 | `Cookie`, `X-XSRF-TOKEN`, `Origin`, `Referer` and `Accept` headers reach Laravel |
 | P4 | Status codes, JSON bodies and `Retry-After` come back unchanged, including 419, 422 and 429 |
@@ -528,12 +530,12 @@ So **the first task of Phase 2 is a proxy validation check** against a minimal L
 
 ### If the forwarding fails validation
 
-**Nothing below is adopted without your decision.**
+**None of these is adopted automatically.** Choosing one is a deliberate decision, recorded as a new ADR and a journal entry.
 
 | Option | Cost | Separate services | Authentication security | Trade-off |
 |---|---|---|---|---|
 | A. One container serving both, as documented earlier | Free | Deployed together. Code, tests and CI still separate | Full Sanctum | Gives up separate deployment |
-| B. Buy a domain and use `app.` and `api.` subdomains | A domain's yearly fee | Yes | Full Sanctum, the setup its docs describe, plus CORS | **A paid requirement**, so it needs your approval |
+| B. Buy a domain and use `app.` and `api.` subdomains | A domain's yearly fee | Yes | Full Sanctum, the setup its docs describe, plus CORS | **A paid requirement**, which I'd only accept as an explicit decision |
 | C. Frontend on Vercel or Netlify with their proxy rewrites | Free | Yes | Full Sanctum if their proxy passes validation | Adds a second hosting provider, which also needs validation |
 | D. Bearer tokens instead of cookies | Free | Yes | **Weaker:** tokens readable by JavaScript can be stolen through XSS | Not recommended |
 | E. Cross-site cookies with `SameSite=None` | Free | Yes | Unreliable: blocked or isolated by major browsers, and the CSRF cookie is unreadable | Rejected |
@@ -620,7 +622,7 @@ The backend uses Neon's **direct** endpoint, not its pooler. The pooler runs PgB
 
 | # | Check | If it fails |
 |---|---|---|
-| 1 | Proxy checks P1–P7 above | Decide between options A–C. **Nothing changes without your approval** |
+| 1 | Forwarding checks P1–P7 above, run against Render | Decide between options A–C, as a recorded decision |
 | 2 | The backend image deploys on the Free plan and fits in 512 MB with about three PHP-FPM workers | Fewer workers |
 | 3 | Laravel reaches Neon's direct endpoint over IPv4 with `verify-full` | Aiven PostgreSQL fallback |
 | 4 | Tenant constraint and locking tests pass against Neon | Aiven PostgreSQL fallback. **Safeguards aren't weakened** |
@@ -650,6 +652,6 @@ The backend uses Neon's **direct** endpoint, not its pooler. The pooler runs PgB
 | Paid backend plan | Removes sleeping. Add a queue worker if real email is enabled | No |
 | Commercial SaaS | Real backups, monitoring, deletion features, legal review | Yes: V1.1 features |
 
-### How to explain this in an interview
+### In short
 
-> "The frontend and backend are separate Render services. Their free domains are both under a public suffix, so to the browser they're different sites. Calling the API directly would make Sanctum's session cookie a third-party cookie, which Safari blocks, and the SPA couldn't read the CSRF cookie at all. Instead of switching to bearer tokens, I made the static site forward `/api` and `/sanctum` to the backend, so the browser sees one origin and every cookie stays first-party. Locally, Vite's proxy does the same job. I validated the forwarding before building on it, and documented the fallbacks, including buying a domain for subdomains, as explicit decisions rather than hidden costs."
+> The frontend and backend are planned as separate Render services. Their free domains are both under a public suffix, so to a browser they're different sites. Calling the API directly would make Sanctum's session cookie a third-party cookie, which Safari blocks, and the SPA couldn't read the CSRF cookie at all. Rather than switch to bearer tokens, the plan is for the static site to forward `/api` and `/sanctum` to the backend, so the browser sees one origin and every cookie stays first-party. Locally, Vite's proxy does the same job. I'm validating the forwarding before building on it, and the fallbacks, including buying a domain for subdomains, are documented as explicit decisions rather than hidden costs.

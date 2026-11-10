@@ -1,6 +1,6 @@
 # 05 — API Specification
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Base URL:** `/api/v1`, on the frontend's origin
+**Status:** Approved, planned contract (Phase 1, 2026-11-10). **No endpoint is implemented yet** · **Last reviewed:** 2026-11-10 · **Base URL:** `/api/v1`, on the frontend's origin
 
 This is the V1 API contract. Permission names refer to the [permissions matrix](04-permissions-matrix.md). On the demo, the browser calls `https://workflow.onrender.com/api/v1`, and the frontend's static site forwards the request to the separate backend service. The contract doesn't change if the API later moves to its own hostname.
 

@@ -1,6 +1,16 @@
 # 06 — Testing Strategy
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-10
+**Status:** Approved strategy (Phase 1, 2026-11-10) · **Last reviewed:** 2026-11-10
+
+### Execution status
+
+| Test area | Status |
+|---|---|
+| WorkFlow unit, feature, isolation, frontend and end-to-end tests | **Planned.** No application code or tests exist yet |
+| Render forwarding experiment, checks P1–P7 | **Run locally only**, against a Node.js stand-in for Render, on 2026-11-10. Not run on Render. See the [experiment README](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy) |
+| Live demo checks (section 8) | **Not started.** Nothing is deployed |
+
+Everything below describes the tests WorkFlow will have, not tests that already exist. When tests start running, this table records what has actually been executed.
 
 ---
 
@@ -154,7 +164,7 @@ A table lists every workspace route. For each, a user from Workspace A attempts 
 
 Each attempt also asserts two more things: **the response body contains nothing from Workspace B**, and **for writes, Workspace B's data is unchanged**.
 
-**Your scenario is a named test in this part:** *a user belonging to Workspace A cannot retrieve a project belonging to Workspace B by changing the project ID in an API request.*
+**The scenario from my original brief is a named test in this part:** *a user belonging to Workspace A cannot retrieve a project belonging to Workspace B by changing the project ID in an API request.*
 
 The 404 body must also be **identical** to the response for an ID that doesn't exist, so a response can't confirm that a record exists elsewhere.
 
@@ -286,7 +296,7 @@ Automated CI can't prove the behaviour of the real hosting. These run manually a
 - [ ] Each role has a test for each new action, including users with no project access.
 - [ ] Read-model effects are checked for leaks if the feature adds visible data.
 - [ ] Frontend loading, empty and error states exist and are tested.
-- [ ] CI passes, and the pull request has been reviewed by you and you can explain it.
+- [ ] CI passes, and I've reviewed the pull request and can explain every change in it.
 
 ### The release is ready when
 
