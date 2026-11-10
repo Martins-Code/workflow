@@ -1,6 +1,6 @@
 # 06 — Testing Strategy
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-10
 
 ---
 
@@ -82,6 +82,8 @@ e2e/                                  Playwright flows
 | Demo mode: registration or invitation for an address outside `workflow.test` | 422 |
 | Demo mode: verification email | Appears in the demo mailbox, and its link verifies the account |
 | Outside demo mode: `/demo/mailbox` | 404, and email goes to the configured mail driver |
+| Email verification with a different `Host` header than the link was generated for | Still verifies, because signatures are relative. A tampered signature fails |
+| Actions with notifications under `QUEUE_CONNECTION=sync` | Notifications are created only after commit, and not at all if the transaction rolls back |
 | Tampered or expired verification link | Rejected |
 
 ### Invitations
@@ -237,7 +239,7 @@ dataset('project_update', [
 
 ## 7. End-to-end smoke flows
 
-Against the same single-origin container image used for the demo, with real cookies.
+Against production builds of both apps: the frontend served by `vite preview`, with a proxy mirroring Render's rewrite rules, and the backend image, with real cookies.
 
 1. **Onboarding:** register, verify, create a workspace, invite a colleague, accept the invitation from a second browser context.
 2. **Delivery:** the PM creates a project and task and assigns it; the contributor moves it to In Review and sees the notification; the PM completes it; the dashboard updates.
@@ -255,14 +257,16 @@ GitHub Actions runs on every pull request to `main`.
 |---|---|
 | Backend | PHP 8.3, `postgres:18` service container, `composer audit`, Pint check, migrate from empty, full test suite |
 | Frontend | Node 22, `npm audit --audit-level=high`, ESLint, Vitest, production build |
-| Container | Build the demo image, check `/up` responds, check that a client-side route serves the SPA |
+| Backend image | Build `backend/Dockerfile` and check `/up` responds |
 | End to end | Playwright smoke flows on pull requests to `main` |
 
 ### Live demo checks
 
 Automated CI can't prove the behaviour of the real hosting. These run manually against the live URL after the first deployment and before release, using the [Phase 2 hosting validation list](02-system-architecture.md#phase-2-hosting-validation):
 
-- Real cookie login, including the cookie attributes in browser developer tools.
+- Proxy checks P1–P7 in [the architecture document](02-system-architecture.md#what-isnt-verified-yet).
+- Real cookie login through the frontend's origin, including the cookie attributes in browser developer tools.
+- The backend's own URL, opened directly, returns 401 for authenticated endpoints.
 - A write without a CSRF token is rejected.
 - Rate limits use the real client IP, and a spoofed `X-Forwarded-For` has no effect.
 - Tenant isolation constraint tests pass against the hosted database.

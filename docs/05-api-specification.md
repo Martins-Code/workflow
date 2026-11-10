@@ -1,15 +1,15 @@
 # 05 — API Specification
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Base URL:** `/api/v1`, on the same origin as the SPA
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Base URL:** `/api/v1`, on the frontend's origin
 
-This is the V1 API contract. Permission names refer to the [permissions matrix](04-permissions-matrix.md). On the demo, the full URL is `https://<service>.onrender.com/api/v1`. The contract doesn't change if the API later moves to its own hostname.
+This is the V1 API contract. Permission names refer to the [permissions matrix](04-permissions-matrix.md). On the demo, the browser calls `https://workflow.onrender.com/api/v1`, and the frontend's static site forwards the request to the separate backend service. The contract doesn't change if the API later moves to its own hostname.
 
 ---
 
 ## 1. Conventions
 
 - **Format:** JSON. Clients send `Accept: application/json`.
-- **Authentication:** Sanctum session cookie, plus an `X-XSRF-TOKEN` header on `POST`, `PUT`, `PATCH` and `DELETE`. On the demo, no CORS is involved, as the SPA and API share one origin.
+- **Authentication:** Sanctum session cookie, plus an `X-XSRF-TOKEN` header on `POST`, `PUT`, `PATCH` and `DELETE`. On the demo, no CORS is involved, as the browser only talks to the frontend's origin.
 - **Health check:** `GET /up` (outside `/api/v1`) reports whether the application is running.
 - **Demo availability:** after idle time, the first request can take about a minute and may receive a non-JSON platform page. The SPA handles this as "waking up". It isn't part of the API contract.
 - **Dates:** `YYYY-MM-DD` for calendar dates. ISO 8601 UTC for timestamps.
@@ -98,7 +98,7 @@ The server doesn't remember a selected workspace between requests. No request bo
 | POST | `/auth/logout` | End the session | User | |
 | POST | `/auth/forgot-password` | Email a reset link | Guest | 3/hour per email + IP |
 | POST | `/auth/reset-password` | Set a new password | Guest | 5/hour per IP |
-| GET | `/auth/email/verify/{id}/{hash}` | Confirm email through a signed link, then redirect to the SPA | Signed URL | |
+| POST | `/auth/email/verify` | Confirm email. The emailed link opens an SPA page, which sends `id`, `hash`, `expires` and `signature` here | Relative signed URL, so the hostname behind the proxy doesn't matter | 10/min per IP |
 | POST | `/auth/email/resend` | Resend verification | User | 3/hour per user |
 | GET | `/me` | Current user and workspaces | User | |
 | PATCH | `/me` | Update profile | User | |

@@ -1,6 +1,6 @@
 # 03 — Database Design
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Engine:** PostgreSQL 18, UTF-8 (D12, proposed)
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Engine:** PostgreSQL 18, UTF-8 (D12)
 
 ---
 
@@ -451,7 +451,7 @@ If a step is forgotten, the `RESTRICT` constraints make the transaction fail, no
 
 ## 7. PostgreSQL design notes
 
-D12 proposes PostgreSQL 18 instead of MySQL. **This is a reviewed conversion, not a rename:** every rule from the MySQL design was checked against PostgreSQL, and nothing protecting tenants was removed.
+D12 adopts PostgreSQL 18 instead of MySQL. **This is a reviewed conversion, not a rename:** every rule from the MySQL design was checked against PostgreSQL, and nothing protecting tenants was removed.
 
 ### Evaluation summary
 
@@ -462,7 +462,7 @@ D12 proposes PostgreSQL 18 instead of MySQL. **This is a reviewed conversion, no
 | Do generated columns, indexes, constraints and locking need adjusting? | The generated column is replaced by a partial index. Foreign keys need explicit indexes. Locking works, with two coding rules. `CHECK` constraints are unchanged |
 | Does Laravel support it cleanly? | Yes, as a first-class database. Two index types need a short raw SQL statement in their migrations |
 | Does testing change? | Same approach, on PostgreSQL 18, plus tests for PostgreSQL-specific behaviour ([testing strategy](06-testing-strategy.md#postgresql-specific-tests)) |
-| How is it set up on Windows, and kept in step with the deployed database? | See [environment parity](02-system-architecture.md#environment-parity) |
+| How is it set up on Windows, and kept in step with the deployed database? | See [environment parity](02-system-architecture.md#local-development-on-windows) |
 
 ### What changes from the MySQL design
 
@@ -505,7 +505,7 @@ D12 proposes PostgreSQL 18 instead of MySQL. **This is a reviewed conversion, no
 |---|---|---|
 | Composite foreign keys, partial and expression indexes, `CHECK`, row locks | Standard PostgreSQL 18. No extensions needed | Hosting validation check 3 |
 | Storage | 1 GB. Demo seed data stays small, and the 20,000-task performance dataset runs locally only | Size checked after seeding |
-| Connections | Direct endpoint. About three PHP-FPM workers, one queue worker, and short-lived GitHub Actions connections | Configuration review |
+| Connections | Direct endpoint. About three PHP-FPM workers and short-lived GitHub Actions connections. No queue worker | Configuration review |
 | Permissions | No superuser. Migrations need only table-owner rights | Migrations on Neon |
 | TLS | `verify-full` with the system CA bundle | Hosting validation check 2 |
 

@@ -1,6 +1,6 @@
 # 07 — Development Roadmap
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-08
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-10
 
 Each phase ends with something working and tested, merged into a stable `main`. Sizes are relative: **S** small, **M** medium, **L** large. Calendar estimates are left out, as they depend on your available time.
 
@@ -38,13 +38,14 @@ Two choices in this order are deliberate:
 
 - Repository layout, `.gitignore`, and a corrected README. *The current README is UTF-16 encoded, so Git treats it as binary. It needs re-saving as UTF-8 so it displays and diffs properly.*
 - Laravel API scaffold with Sanctum, and React/Vite/Tailwind scaffold.
-- Local environment, following [environment parity](02-system-architecture.md#environment-parity):
+- Local environment, following [environment parity](02-system-architecture.md#local-development-on-windows):
   - PHP 8.3 from Laragon, with `pdo_pgsql` and `pgsql` enabled. **`php` isn't currently on your terminal's PATH, so that needs fixing first.**
   - PostgreSQL 18 from the official EDB Windows installer, which includes pgAdmin.
 - `.env.example` files, health endpoint, error format, request ID, Pint, ESLint and Prettier.
 - Vite proxy, so local development is same-origin.
 - CI: backend on PostgreSQL 18, and frontend jobs.
-- Single-origin Docker image in `deploy/`.
+- **First, the proxy validation check** (P1–P7 in [the architecture document](02-system-architecture.md#what-isnt-verified-yet)): a minimal Laravel service behind a Render static site. If it fails, you choose a fallback before Phase 3.
+- `backend/Dockerfile`, Render static site configuration, and GitHub Actions workflows with deploy hooks for each service.
 - **You** create free Render and Neon accounts, both in the same region. No secrets ever go in the repository, and they're entered only in provider settings.
 - Run the checks in [hosting validation](02-system-architecture.md#phase-2-hosting-validation) that don't need authentication.
 
@@ -58,13 +59,13 @@ Two choices in this order are deliberate:
 
 - Register, verify email, login, logout, reset password, profile.
 - CSRF and session cookie flow, rate limits, frontend auth pages and protected routes.
-- Deploy on one origin on the free platform URL (D7), with migrations run from GitHub Actions.
+- Deploy both services (D7): the frontend forwards to the backend, and migrations run from GitHub Actions before the backend deploys.
 - Demo mode: reserved-domain rule and demo mailbox (D13).
 - Complete the remaining hosting validation: real cookie flow, client IP and the demo mailbox.
 
 **Exit:** all authentication tests pass, including the real cookie flow, login works on the live URL, and registration with verification works through the demo mailbox.
 
-**Learning:** sessions versus tokens, cookies, CSRF, CORS and why one origin avoids it, `SameSite`, trusted proxies, HTTPS deployment.
+**Learning:** sessions versus tokens, cookies, CSRF, CORS and why the proxy avoids it, `SameSite`, the Public Suffix List, trusted proxies, signed URLs, HTTPS deployment.
 
 ### Phase 4: Tenancy core (M) — the most important phase
 
@@ -84,7 +85,7 @@ Two choices in this order are deliberate:
 **Branch:** `feature/workspace-members-invitations`
 
 - Member list, role changes, removal, leaving, last-Administrator protection.
-- Invitation lifecycle, email delivery through a queue, accept flow for new and existing users.
+- Invitation lifecycle, emails through Laravel's mail system (the demo mailbox on the demo), accept flow for new and existing users.
 - Team pages.
 
 **Exit:** two real browser sessions complete the invite flow, and all invitation security tests pass.
@@ -130,12 +131,12 @@ Split into two branches, so each pull request stays reviewable.
 
 **Branch:** `feature/notifications`
 
-- Custom notification storage, queued after commit, the events in FR-G4.
+- Custom notification storage, created after commit without a queue worker (ADR-11), the events in FR-G4.
 - Bell, list, mark-read, per-workspace unread count, polling.
 
 **Exit:** the right people are notified, and removed members lose access to old notifications.
 
-**Learning:** queues, after-commit events, polling.
+**Learning:** after-commit events, queues and why V1 doesn't need a worker, polling.
 
 ### Phase 10: Dashboard and reports (M)
 
@@ -168,7 +169,7 @@ Split into two branches, so each pull request stays reviewable.
 
 ### After V1: only if commercial use becomes likely
 
-Move to a custom domain and paid hosting, split the worker, add real backups and monitoring, and build the V1.1 deletion features. See the [upgrade path](02-system-architecture.md#moving-to-a-custom-domain-or-vps-later). **Nothing here is committed or budgeted now.**
+Move to a custom domain and paid hosting, split the worker, add real backups and monitoring, and build the V1.1 deletion features. See the [upgrade path](02-system-architecture.md#moving-to-a-custom-domain-later). **Nothing here is committed or budgeted now.**
 
 ---
 
