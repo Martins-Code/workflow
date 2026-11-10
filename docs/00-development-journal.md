@@ -226,3 +226,45 @@ I approved the Phase 1 documents, including D12 (PostgreSQL 18 on Neon) and D13 
 | Unresolved | Whether Render's forwarding preserves cookies, headers and bodies. Whether the experiment's Docker image builds and fits the free instance. Corrections C1–C5 to the test harness, which are being made next |
 
 **Next:** apply corrections C1–C5 on `spike/render-proxy-test`, re-run the local checks, and record the results.
+
+---
+
+## 2026-11-10 — Test-harness corrections C1–C6 and second local run
+
+**Evidence:** commit `e922109` on `spike/render-proxy-test`. The details and both local runs are in the [experiment README](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy).
+
+**Working on:** fixing the five issues found in the review, so each check reports only what it can actually establish before the experiment goes to Render.
+
+**Changes:** all in the test page, except one option added to the local stand-in.
+
+| Correction | What changed |
+|---|---|
+| C1 | P6 now needs evidence of a real wake-up, not just a recently started container |
+| C2 | P2 sets, clears and re-sets cookies, so removal is tested on every run, in both browser storage and backend receipt |
+| C3 | P3 judges `Origin` and `Referer` only when the browser sent them |
+| C4 | P5 compares exact, normalised addresses, and reports loopback or private input as INCONCLUSIVE |
+| C5 | The full run waits at most 120 s for the backend, and stops at once on a clearly misconfigured rewrite. The stand-in gained `SIMULATE=missing-rewrite` to test this |
+
+The backend didn't change.
+
+**Testing (second local run, 2026-11-10):**
+- **Full run, twice:** P1–P4 PASS, P5 INCONCLUSIVE (loopback address), P6 INCONCLUSIVE (the backend never sleeps locally), P7 PASS on local loopback timing only.
+- **C1:** the wake test run against a just-started backend that answered in 133 ms reported INCONCLUSIVE. The original code would have reported PASS.
+- **C5, missing rewrite:** a simulated missing rewrite rule was reported in 0.1 s, with the cause.
+- **C5, backend down:** a stopped backend was reported after 121.5 s and 25 attempts, at the 120 s cap.
+- **C4:** exact matching was confirmed by calling the helpers directly in the page.
+
+**Additional defect found (C6):** passing checks could display failure text in their details. Results were correct, but the diagnostics were misleading. I fixed it in the same commit, and recorded it rather than folding it silently into the other corrections.
+
+**Where things stand:**
+
+| Category | Status |
+|---|---|
+| Proposed architecture | Separate Render services with forwarding (D7, ADR-09). Approved, **not validated** |
+| Implemented and tested locally | The experiment's test harness and echo backend, against a Node.js stand-in. Local results establish that the harness measures correctly. They don't establish Render's behaviour, visitor IP handling, cold starts or real latency |
+| Validated on Render | Nothing yet |
+| Unresolved | Render's forwarding behaviour (P1–P7). Whether the Docker image builds, which has never been tried. Cookie attributes on a real HTTPS deployment, which need manual inspection |
+
+**What I learned:** a check has to be able to report "I couldn't tell". Two of the original checks could report PASS in conditions where the thing they test can't happen: an IP check on localhost, and a wake test against a backend that had only just started.
+
+**Next:** understand the Dockerfile before its first build, deploy the experiment to Render, and run P1–P7 there.

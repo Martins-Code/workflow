@@ -56,7 +56,7 @@ Requirements, architecture, database design, permissions, API contract, testing 
 
 | Item | Status |
 |---|---|
-| Forwarding experiment, checks P1–P7 ([architecture, section 10](02-system-architecture.md#what-isnt-verified-yet)): a plain-PHP echo service behind a Render static site | Built. Checked locally against a Node.js stand-in for Render on 2026-11-10. **Not yet deployed to Render** |
+| Forwarding experiment, checks P1–P7 ([architecture, section 10](02-system-architecture.md#what-isnt-verified-yet)): a plain-PHP echo service behind a Render static site | Built. Test-harness corrections C1–C6 applied. Checked locally against a Node.js stand-in for Render on 2026-11-10. **Not yet deployed to Render** |
 | The experiment's Docker image | **Not yet built.** Docker isn't installed on my development machine, so Render's build will be the first |
 | Decision on D7 from the experiment's Render results | Pending. If the forwarding fails, choosing a fallback is a recorded decision before Phase 3 |
 | Root README rewritten in UTF-8 (it was UTF-16, so Git treated it as binary) | Done in the 2026-11-10 documentation review |
@@ -299,9 +299,10 @@ Architectural decisions carry this in their ADR in [the architecture document](0
 
 ## 7. Next steps
 
-1. Commit the experiment on `spike/render-proxy-test` and push it, so Render can build from it.
-2. Decide whether to apply the small test-harness corrections proposed in the [experiment README](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy) before deploying.
-3. Deploy the experiment to Render: a free static site and a free Docker web service. This is also the first build of its Docker image.
-4. Run P1–P7 against Render in two browsers, and run P6 after at least 16 minutes idle. Record the results in the experiment README, [architecture, section 10](02-system-architecture.md#what-isnt-verified-yet) and the journal.
-5. Confirm D7, or record a fallback decision.
-6. Start `chore/project-foundation`.
+1. ~~Commit and push the experiment on `spike/render-proxy-test`.~~ Done on 2026-11-10.
+2. ~~Apply the test-harness corrections.~~ C1–C6 applied and re-checked locally on 2026-11-10. See the [experiment README](https://github.com/Martins-Code/workflow/tree/spike/render-proxy-test/experiments/render-proxy).
+3. Understand the experiment's Dockerfile before its first build.
+4. Deploy the experiment to Render: a free static site and a free Docker web service. This is also the first build of its Docker image.
+5. Run P1–P7 against Render in two browsers, and run P6 after at least 16 minutes idle. Record the results in the experiment README, [architecture, section 10](02-system-architecture.md#what-isnt-verified-yet) and the journal.
+6. Confirm D7, or record a fallback decision.
+7. Start `chore/project-foundation`. CI/CD is introduced deliberately as a separate milestone as the application develops.
