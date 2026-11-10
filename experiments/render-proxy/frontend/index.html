@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" data-page="proxy-experiment-frontend">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Same referrer policy WorkFlow will use. Sanctum relies on Referer when Origin is absent. -->
+  <meta name="referrer" content="same-origin">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <title>Render Proxy Experiment</title>
+  <style>
+    :root {
+      --bg: #f7f7f5; --surface: #ffffff; --text: #1d1d1b; --muted: #5f5f5a; --border: #dddcd6;
+      --pass: #1f7a3f; --pass-bg: #e3f3e8; --fail: #b3261e; --fail-bg: #fbe4e2;
+      --inc: #8a5a00; --inc-bg: #fbf0d9; --accent: #2f4f9e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161615; --surface: #1f1f1d; --text: #ecebe6; --muted: #a8a79f; --border: #3a3a36;
+        --pass: #7fd39b; --pass-bg: #1d3325; --fail: #f2a29b; --fail-bg: #3d2120;
+        --inc: #f0c46b; --inc-bg: #3a3020; --accent: #9bb3f0;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+    main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    h2 { font-size: 1.05rem; margin: 0 0 8px; }
+    .lead { color: var(--muted); margin: 0 0 20px; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; font-weight: 600; margin-bottom: 12px; }
+    label span { display: block; font-weight: 400; color: var(--muted); font-size: 0.9rem; }
+    input { width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--surface); cursor: pointer; }
+    button.secondary { background: transparent; color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: progress; }
+    button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #status { margin: 12px 0 0; color: var(--muted); min-height: 1.5em; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+    th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
+    .PASS { color: var(--pass); background: var(--pass-bg); }
+    .FAIL { color: var(--fail); background: var(--fail-bg); }
+    .INCONCLUSIVE, .RUNNING, .NOT-RUN { color: var(--inc); background: var(--inc-bg); }
+    details { margin-top: 6px; }
+    summary { cursor: pointer; color: var(--accent); }
+    ul.checks { margin: 6px 0; padding-left: 18px; }
+    ul.checks li.ok::marker { content: "✔ "; color: var(--pass); }
+    ul.checks li.bad::marker { content: "✘ "; color: var(--fail); }
+    pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow-x: auto; font-size: 0.8rem; max-height: 320px; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+    dt { color: var(--muted); }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    code { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Render forwarding experiment</h1>
+    <p class="lead">
+      Checks whether this static site can forward <code>/api/*</code> and <code>/sanctum/*</code>
+      to a separate backend service while keeping what Laravel Sanctum's cookie authentication needs.
+    </p>
+
+    <section class="panel" aria-labelledby="inputs-heading">
+      <h2 id="inputs-heading">Inputs</h2>
+      <label for="direct-url">Direct backend URL
+        <span>Optional. Used only by P7 to compare forwarded and direct latency, for example https://my-backend.onrender.com</span>
+        <input id="direct-url" type="url" placeholder="https://your-backend.onrender.com" autocomplete="off">
+      </label>
+      <label for="real-ip">Your public IP address
+        <span>Needed for P5 to pass. Search "what is my IP" and paste the value shown. It stays in this page and isn't stored.</span>
+        <input id="real-ip" type="text" placeholder="e.g. 198.51.100.23" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="actions">
+        <button id="run-all" type="button">Run P1–P7</button>
+        <button id="run-wake" type="button" class="secondary">Run wake test (P6)</button>
+        <button id="copy" type="button" class="secondary">Copy results as JSON</button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Summary and diagnostics</th></tr></thead>
+        <tbody id="results"></tbody>
+      </table>
+    </div>
+
+    <section class="panel" aria-labelledby="env-heading" style="margin-top:16px">
+      <h2 id="env-heading">Environment</h2>
+      <dl id="environment"></dl>
+    </section>
+  </main>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
