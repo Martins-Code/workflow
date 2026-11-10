@@ -1,6 +1,6 @@
 # 07 — Development Roadmap
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08
 
 Each phase ends with something working and tested, merged into a stable `main`. Sizes are relative: **S** small, **M** medium, **L** large. Calendar estimates are left out, as they depend on your available time.
 
@@ -38,17 +38,19 @@ Two choices in this order are deliberate:
 
 - Repository layout, `.gitignore`, and a corrected README. *The current README is UTF-16 encoded, so Git treats it as binary. It needs re-saving as UTF-8 so it displays and diffs properly.*
 - Laravel API scaffold with Sanctum, and React/Vite/Tailwind scaffold.
-- Local environment: PHP 8.3 and MySQL 8.4 from Laragon. **`php` isn't currently on your terminal's PATH, so that needs fixing first.**
+- Local environment, following [environment parity](02-system-architecture.md#environment-parity):
+  - PHP 8.3 from Laragon, with `pdo_pgsql` and `pgsql` enabled. **`php` isn't currently on your terminal's PATH, so that needs fixing first.**
+  - PostgreSQL 18 from the official EDB Windows installer, which includes pgAdmin.
 - `.env.example` files, health endpoint, error format, request ID, Pint, ESLint and Prettier.
 - Vite proxy, so local development is same-origin.
-- CI: backend on MySQL and frontend jobs.
+- CI: backend on PostgreSQL 18, and frontend jobs.
 - Single-origin Docker image in `deploy/`.
-- **You** create free Render, Aiven and email accounts. No secrets ever go in the repository, and they're entered only in provider settings.
+- **You** create free Render and Neon accounts, both in the same region. No secrets ever go in the repository, and they're entered only in provider settings.
 - Run the checks in [hosting validation](02-system-architecture.md#phase-2-hosting-validation) that don't need authentication.
 
 **Exit:** a fresh clone runs by following the README, the SPA shows the API health status on the live platform URL, CI is green, and each validation result is recorded. If a check fails, the documented fallback is agreed with you before Phase 3.
 
-**Learning:** monorepo structure, `.env` handling, GitHub Actions, Docker, reverse proxies, origins and the Public Suffix List.
+**Learning:** monorepo structure, `.env` handling, GitHub Actions, Docker, reverse proxies, origins and the Public Suffix List, PostgreSQL basics and TLS certificate verification.
 
 ### Phase 3: Authentication and first deployment (M)
 
@@ -57,9 +59,10 @@ Two choices in this order are deliberate:
 - Register, verify email, login, logout, reset password, profile.
 - CSRF and session cookie flow, rate limits, frontend auth pages and protected routes.
 - Deploy on one origin on the free platform URL (D7), with migrations run from GitHub Actions.
-- Complete the remaining hosting validation: real cookie flow, client IP and email.
+- Demo mode: reserved-domain rule and demo mailbox (D13).
+- Complete the remaining hosting validation: real cookie flow, client IP and the demo mailbox.
 
-**Exit:** all authentication tests pass, including the real cookie flow, login works on the live URL, and email works or its fallback is active.
+**Exit:** all authentication tests pass, including the real cookie flow, login works on the live URL, and registration with verification works through the demo mailbox.
 
 **Learning:** sessions versus tokens, cookies, CSRF, CORS and why one origin avoids it, `SameSite`, trusted proxies, HTTPS deployment.
 
@@ -86,7 +89,7 @@ Two choices in this order are deliberate:
 
 **Exit:** two real browser sessions complete the invite flow, and all invitation security tests pass.
 
-**Learning:** token hashing, transactions, row locks, queues, generated columns.
+**Learning:** token hashing, transactions, row locks, queues, partial unique indexes, PostgreSQL transaction errors.
 
 ### Phase 6: Projects (M)
 
@@ -151,7 +154,7 @@ Split into two branches, so each pull request stays reviewable.
 - Accessibility pass, responsive review, Playwright flows.
 - Security checklist review, headers and CSP, dependency audit.
 - **Rebuild rehearsal** from empty, dump restored to a separate database, log review.
-- Hosting runbook: wake-up, Aiven power-on, re-enabling scheduled workflows, rebuilding data.
+- Hosting runbook: wake-up, Neon compute-hour usage, re-enabling scheduled workflows, rebuilding data, switching to the fallback database.
 
 **Exit:** every criterion in [requirements, section 7](01-product-requirements.md#7-acceptance-criteria-for-the-first-release) passes.
 
@@ -270,7 +273,7 @@ This project is also how you build your engineering knowledge, so finishing a fe
 
 | Area | Topics |
 |---|---|
-| Database | Foreign keys, one-to-many and many-to-many relationships, composite keys, indexes, transactions, locks |
+| Database | Foreign keys, one-to-many and many-to-many relationships, composite keys, indexes including partial and expression indexes, transactions, locks, PostgreSQL versus MySQL |
 | API | REST, HTTP methods, status codes, request validation, response design, authentication |
 | Authentication | Sessions, cookies, CSRF, CORS, origins and sites, how Sanctum works |
 | Tenant isolation | The security risks, and how the protection layers work together |
@@ -283,7 +286,7 @@ This project is also how you build your engineering knowledge, so finishing a fe
 
 ## 6. Immediately after Phase 1 approval
 
-1. D1–D11 are recorded as confirmed in [the requirements](01-product-requirements.md#2-confirmed-decisions).
+1. D1–D11 are recorded as confirmed, and you approve or change D12 and D13, in [the requirements](01-product-requirements.md#2-confirmed-decisions).
 2. You commit these revisions on `docs/phase-1-architecture`, push them, and merge the pull request.
 3. You confirm, and I give you the commands for the Phase 2 branch, `chore/project-foundation`.
 4. You create the branch and confirm.

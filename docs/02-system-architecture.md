@@ -1,6 +1,6 @@
 # 02 — System Architecture
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08
 
 Decision references such as **D5** point to [01 — Product Requirements](01-product-requirements.md#2-confirmed-decisions).
 
@@ -8,7 +8,7 @@ Decision references such as **D5** point to [01 — Product Requirements](01-pro
 
 ## 1. System overview
 
-WorkFlow is two separate applications: a React single-page app (SPA) and a Laravel REST API backed by MySQL. They have separate code, dependencies, configuration, tests and CI jobs, and they communicate only through the HTTP API. For the free portfolio demo, their build outputs are packaged into **one container on one origin**, so the browser sees a single site. This is the D7 demo deployment, and section 10 explains why.
+WorkFlow is two separate applications: a React single-page app (SPA) and a Laravel REST API backed by PostgreSQL. They have separate code, dependencies, configuration, tests and CI jobs, and they communicate only through the HTTP API. For the free portfolio demo, their build outputs are packaged into **one container on one origin**, so the browser sees a single site. This is the D7 demo deployment, and section 10 explains why.
 
 ```mermaid
 flowchart TB
@@ -24,19 +24,17 @@ flowchart TB
         end
     end
 
-    DB[("Aiven free MySQL 8.4<br/>app data, sessions, queue, cache")]
-    Mail["Email HTTP API"]
+    DB[("Neon free PostgreSQL 18<br/>app data, sessions, queue, cache,<br/>demo mailbox")]
     Actions["GitHub Actions<br/>CI, migrations, nightly reset"]
 
     Browser -->|"HTTPS: pages and JSON, same origin"| Edge
     Edge --> Web
     Web --> Static
     Web --> API
-    API -->|"TLS"| DB
-    Worker -->|"TLS"| DB
-    Worker -->|"HTTPS"| Mail
+    API -->|"TLS, verify-full"| DB
+    Worker -->|"TLS, verify-full"| DB
     Actions -->|"TLS: migrate, reset"| DB
-    Actions -.->|"deploy"| Render
+    Actions -.->|"deploy hook"| Render
 ```
 
 ### Versions
@@ -45,7 +43,7 @@ flowchart TB
 |---|---|---|
 | Laravel | 13 | Latest major confirmed. Security fixes until Q1 2028. Check for a newer release when scaffolding in Phase 2 |
 | PHP | 8.3 | Laravel 13's minimum. Already installed in your Laragon |
-| MySQL | 8.4 LTS | Already installed locally (8.4.3). Aiven creates new services on 8.4. **Avoid hosts offering only 8.0, which is past end of life** |
+| PostgreSQL | 18 | Latest major release, supported until November 2030. Used locally, in CI and on Neon (D12). Laravel 13 supports PostgreSQL 10 and later. Your Laragon MySQL is no longer used by WorkFlow |
 | Node | 22 | Already installed. Used only to build the frontend |
 
 ---
@@ -99,7 +97,7 @@ Controllers stay thin. Operations with several steps, such as `AssignTask` or `R
 
 ### ADR-06: Database for sessions, queue and cache
 
-No Redis in V1. MySQL handles all three, so there is one less service to run and back up. The database session driver also makes "end all of this user's other sessions" a simple delete. Laravel can switch to Redis later through configuration.
+No Redis in V1. PostgreSQL handles all three, so there is one less service to run and back up. The database session driver also makes "end all of this user's other sessions" a simple delete. Laravel can switch to Redis later through configuration.
 
 ### ADR-07: Polling, not WebSockets
 
@@ -118,7 +116,18 @@ workflow/
 
 ### ADR-09: Portfolio-first hosting on a single origin (D7)
 
-One Docker web service serves both applications from a free platform URL, with MySQL hosted separately. Sanctum cookie authentication and all tenant safeguards stay exactly as designed. See section 10 for the evaluation, limitations and upgrade path.
+One Docker web service serves both applications from a free platform URL, with PostgreSQL hosted separately. Sanctum cookie authentication and all tenant safeguards stay exactly as designed. See section 10 for the evaluation, limitations and upgrade path.
+
+### ADR-10: PostgreSQL instead of MySQL (D12, proposed)
+
+1. **What it is:** PostgreSQL is an open-source relational database, like MySQL. Both store tables, enforce foreign keys and run SQL, but they differ in details that matter to this design.
+2. **What problem it solves:** free managed MySQL is no longer available to new users, and the remaining MySQL option costs $5 a month. Free PostgreSQL hosting is still available.
+3. **Why we're choosing it:** every database-level tenant safeguard still works: composite foreign keys, `CHECK` constraints and row locks. Two parts become simpler. Partial unique indexes replace the MySQL generated-column workaround for invitations, and schema changes run inside transactions, so a failed migration rolls back cleanly. Laravel supports PostgreSQL as a first-class database, so no extra abstraction layer is needed.
+4. **Alternatives and trade-offs:** paying for Aiven's MySQL Developer plan keeps MySQL, but adds a recurring cost. Free MySQL-compatible services were rejected because they behave differently from real MySQL. SQLite has no network server, and its locking and constraint behaviour don't represent a hosted multi-user app. PostgreSQL's costs are its learning curve: case-sensitive text comparison, foreign keys that don't create their own indexes, and transactions that stop working after an error until rolled back.
+5. **How it works in WorkFlow:** the same PostgreSQL 18 runs locally on Windows, in CI and on Neon. Migrations use Laravel's schema builder, with a few short raw SQL statements for features the builder doesn't document, such as the partial index. See [database design, section 7](03-database-design.md#7-postgresql-design-notes).
+6. **How to explain it in an interview:**
+
+> "The design depends on database-enforced tenant constraints, so the engine had to support composite foreign keys, check constraints and row locking. When free MySQL hosting ended, I evaluated PostgreSQL against those requirements before switching. It met all of them, and partial unique indexes and transactional migrations made parts of the design simpler. I run the same major version locally, in CI and in production, so tests exercise the real behaviour."
 
 ### Not recommended: changing the approved stack
 
@@ -165,7 +174,7 @@ sequenceDiagram
     participant Bind as Route binding + global scope
     participant Policy as Policy
     participant Ctrl as Controller and action
-    participant DB as MySQL
+    participant DB as PostgreSQL
 
     SPA->>Auth: GET /api/v1/workspaces/acme/projects/12 (cookie)
     alt no valid session
@@ -357,7 +366,7 @@ All values come from environment variables, so changing profile doesn't change a
 | **Workspace isolation** | Seven layers in section 3 | Isolation suite |
 | **API protection** | Default-deny route groups, versioned API, capped pagination, whitelisted filters and sorts | Feature tests |
 | **Input validation** | Form Requests on all writes, with length limits and enums. Only validated data reaches models, never `$request->all()` | Validation tests |
-| **SQL injection** | Eloquent and bound parameters. Sort columns come from a whitelist, as bindings can't protect column names. `LIKE` wildcards are escaped in search | Tests with malicious input |
+| **SQL injection** | Eloquent and bound parameters. Sort columns come from a whitelist, as bindings can't protect column names. Search uses case-insensitive `ILIKE` with `%` and `_` escaped | Tests with malicious input |
 | **XSS** | React escapes output by default. `dangerouslySetInnerHTML` is banned by a lint rule. Plain text only (D10). Content-Security-Policy on the frontend, no third-party scripts | Lint rule and tests with script payloads |
 | **CSRF** | Sanctum CSRF middleware on stateful requests and `SameSite=Lax` | One real cookie-flow test, since `Sanctum::actingAs` skips CSRF |
 | **Secure cookies** | Section 6, with an HSTS header from Nginx | Live demo checklist |
@@ -390,7 +399,7 @@ Having authentication doesn't make the system secure, and these controls don't e
 | Area | Approach |
 |---|---|
 | Maintainability | Standard Laravel conventions, Laravel Pint and ESLint in CI, one location for each rule |
-| Scalability | Composite indexes on real query patterns. If needed, move to paid hosting, then add Redis, then add more app servers. All of this is possible because the API is stateless. On the free plan, PHP-FPM worker count stays low to respect the database's 76-connection limit and limited memory |
+| Scalability | Composite indexes on real query patterns. If needed, move to paid hosting, then add Redis, then add more app servers. All of this is possible because the API is stateless. On the free plan, the PHP-FPM worker count stays low, around 3, to fit 512 MB of memory and the 20-connection limit of the Aiven fallback |
 | Performance | Eager loading, with `Model::preventLazyLoading()` outside production so N+1 issues raise errors. Reports calculated live with indexes; caching only if measurement shows a need. Pagination capped at 100 |
 | Reliability | Transactions in actions. Notifications and email dispatched after commit. Failed jobs retained and retried |
 | Logging | JSON logs written to `stderr` with `request_id`, `user_id` and `workspace_id`, as the container's disk is temporary. Security events logged: failed logins, role changes, invitation use, denied access |
@@ -409,7 +418,7 @@ Having authentication doesn't make the system secure, and these controls don't e
 | **R2** | A tenant query bypasses the global scope | Critical | Medium | Fail-closed scope, architecture tests, composite foreign keys, isolation suite |
 | **R3** | A new route lacks tenant middleware or a policy | Critical | Medium | Route guard test fails on any uncovered route |
 | **R4** | Middleware order breaks silently after an upgrade | Critical | Low | An explicit test proves a cross-tenant ID returns 404 |
-| **R5** | Tests pass on SQLite but behaviour differs on MySQL | High | High if SQLite used | Run all backend tests on MySQL, locally and in CI |
+| **R5** | Tests pass on another engine or version but behave differently on the hosted database | High | High if SQLite used | PostgreSQL 18 locally, in CI and on Neon. Constraint tests also run against the hosted database |
 | **R6** | Member removal leaves orphaned data, or fails on restricted foreign keys | Medium | Medium | One tested action. Includes soft-deleted tasks when clearing assignees |
 | **R7** | Race conditions: two Administrators demote each other, or an invitation is accepted twice | Medium | Low | Row locks in transactions, plus unique constraints as a backstop |
 | **R8** | Kanban positions become disordered or run out of gaps | Low | Medium | Gapped integer positions calculated by the server, with a rebalance for the column |
@@ -419,17 +428,18 @@ Having authentication doesn't make the system secure, and these controls don't e
 | **R12** | AI-generated code that you cannot explain | High for interviews | Medium | Small pull requests that you review, with key concepts explained at each phase |
 | **R13** | A recruiter meets the one-minute wake-up, or a slow free-tier response, and leaves | Medium | High | README warning, clear waking message, video and screenshots as backup. No dependence on keep-alive tricks |
 | **R14** | Render free plan rejects something the design needs, such as the Docker image's memory use | High | Medium | Phase 2 validation before anything depends on it, with fallbacks in section 10 |
-| **R15** | Aiven powers off an idle database, or deletes one powered off for 180 days | Medium | Medium | Nightly reset gives regular activity. Runbook covers power-on and rebuild from seeders |
+| **R15** | Neon's 100 compute-hours a month run out, suspending the database until the next month | Medium | Medium | Cap compute at 0.25 units (about 400 awake hours). `robots.txt` blocks crawlers. Usage reviewed during validation. Aiven fallback |
 | **R16** | GitHub disables scheduled workflows after 60 days without repository activity, stopping resets | Medium | High after active development | Runbook to re-enable. Reset is also manually triggerable. Delayed runs are acceptable |
-| **R17** | Verification and invitation emails fail, or reach spam, without an owned domain | High | Medium | Validate in Phase 2. Fallback in section 10 |
+| **R17** | The public demo mailbox is mistaken for safe storage, or demo mode is enabled with real users | High | Low | Reserved `workflow.test` addresses only. Mailbox routes exist only in demo mode, with tests proving it. Banner warning |
 | **R18** | Wrong client IP behind the platform proxy breaks or weakens IP rate limits | Medium | Medium | Verify in Phase 2. Sensitive limits also key on email or user, not IP alone |
-| **R19** | Provider changes or ends a free tier | Medium | Medium | Standard Docker and MySQL, no provider-specific code, seeders recreate data |
+| **R19** | Provider changes or ends a free tier, as Aiven did for MySQL | Medium | Medium | Standard Docker and PostgreSQL, no provider-specific code, seeders recreate data, named fallbacks |
+| **R20** | PostgreSQL differences cause bugs: case-sensitive email matching, unindexed foreign keys, transactions stuck after an error | Medium | Medium | Tests for each behaviour in [the testing strategy](06-testing-strategy.md#postgresql-specific-tests), and a guard test for unindexed foreign keys |
 
 ---
 
 ## 10. Hosting strategy
 
-**Goal:** a public live URL that recruiters and developers can test, at no or minimal cost, with no purchased domain or paid VPS, and **with Sanctum cookie authentication unchanged.** Plan details below were checked on 2026-11-05 and can change.
+**Goal:** a public live URL that recruiters and developers can test, at no cost, with no purchased domain or paid VPS, and **with Sanctum cookie authentication and every tenant safeguard unchanged.** Provider terms below were checked against vendor documentation on 2026-11-08. Free plans change, as Aiven's free MySQL did, so Phase 2 validates them on real accounts before anything depends on them.
 
 ### Can both apps run under one origin on a platform domain?
 
@@ -439,26 +449,84 @@ Having authentication doesn't make the system secure, and these controls don't e
 |---|---|
 | `/api/*`, `/sanctum/*` | Laravel through PHP-FPM |
 | `/up` | Laravel health check |
+| `/demo/mailbox*` | Laravel, demo mode only (D13) |
 | Everything else | The React build, falling back to `index.html` for client-side routes |
 
-The browser sees one origin, so cookies are first-party and the login flow matches Sanctum's documented SPA flow. Sanctum's stated requirement, that the SPA and API share the same top-level domain, is satisfied because they share the same host.
+The browser sees one origin, so cookies are first-party and the login flow matches Sanctum's documented SPA flow. Sanctum's stated requirement, that the SPA and API share the same top-level domain, is met because they share the same host.
 
 ### Why the platform constraint leads here
 
 `onrender.com`, `vercel.app`, `netlify.app`, `up.railway.app`, `fly.dev`, `alwaysdata.net` and `duckdns.org` are all on the Public Suffix List. Browsers refuse a cookie set for the whole of such a domain. So the usual `app.` plus `api.` setup is unavailable without a custom domain, whichever of these providers is chosen. The realistic free choice is therefore one origin.
 
-### Options evaluated
+### How WorkFlow actually uses the container
+
+Supporting Docker doesn't by itself make a platform suitable. This is the specific path our application takes:
+
+1. **Build.** Render builds `deploy/Dockerfile` from the repository, using its Dockerfile path setting.
+   - Stage one uses Node 22 to build `frontend/` into static files.
+   - Stage two installs `backend/` PHP dependencies without development packages.
+   - The final image contains PHP 8.3-FPM with `pdo_pgsql` and OPcache, Nginx, Supervisor and the system CA certificates, plus both builds.
+   - **No secrets enter the image.** Render passes every environment variable to Docker as a build argument, and its docs warn against referencing sensitive ones in a Dockerfile, so the Dockerfile declares none.
+2. **Start.** A start script:
+   - writes the Nginx configuration to listen on `0.0.0.0:$PORT` (Render's default is 10000),
+   - caches Laravel's configuration and routes using the *runtime* environment, so secrets exist only in memory and in Render's settings,
+   - starts Supervisor, which runs Nginx, about three PHP-FPM workers, and the queue worker.
+3. **Health check.** Render calls `/up`. A deployment that doesn't become healthy within 15 minutes is cancelled, and the previous version keeps running.
+4. **Request.**
+   - Render's load balancer terminates HTTPS and forwards plain HTTP to Nginx.
+   - Laravel trusts that proxy, so it knows the original request was HTTPS.
+   - Nginx sends API paths to PHP-FPM, serves hashed asset files with long caching, and serves `index.html` uncached.
+   - Nginx adds the security headers: CSP, HSTS, `Referrer-Policy: same-origin` and `nosniff`.
+5. **Sleep.**
+   - After 15 minutes without inbound traffic, Render stops the container and **its filesystem is discarded.**
+   - The next browser request sees Render's loading page for about a minute while a fresh container starts.
+   - Nothing is lost, because nothing lives on the disk: sessions, cache, queue and demo mailbox are in PostgreSQL, logs go to `stderr`, and V1 stores no uploaded files.
+
+### Compatibility review
+
+| Area | How WorkFlow uses it | Evidence | Status |
+|---|---|---|---|
+| Docker on the free plan | A Docker web service on the Free instance: 512 MB RAM, 0.1 CPU | Render's free plan covers web services, and Docker is a web-service runtime. **Not stated in one sentence** | Validate (check 1) |
+| Nginx routing | Our own configuration, above | Not provider-dependent | Tested by the container CI job |
+| Sanctum session authentication | First-party requests on one host. The stateful domain is the service's own hostname. `Referer` is sent on same-origin requests | Sanctum docs: same top-level domain required | Compatible by design. Proven live in check 5 |
+| CSRF | Laravel sets the `XSRF-TOKEN` cookie. The SPA reads it on the same host and returns it as the `X-XSRF-TOKEN` header | Sanctum docs | Compatible |
+| Session configuration | Database sessions. Host-only, `Secure`, `HttpOnly`, `SameSite=Lax` cookie. Trusted-proxy settings for HTTPS detection | Render docs: the load balancer terminates TLS and forwards HTTP. **Forwarded headers are not documented** | Compatible. Header handling checked in check 6 |
+| Same-origin requests | Relative `/api/v1` base URL | Not provider-dependent | Compatible, and no CORS needed |
+| Database TLS | `sslmode=verify-full` against the system CA bundle. Laravel passes `sslmode` and `sslrootcert` into the PostgreSQL connection string | Neon requires TLS and uses the public Let's Encrypt root. Laravel's connector source confirms the options | Compatible. IPv4 reachability checked in check 2 |
+| Environment variables and secrets | Runtime environment variables in Render, and GitHub Actions secrets for migrations and resets | Render docs | Compatible |
+| Ephemeral filesystem | Nothing persistent is stored on disk | Render docs | Compatible |
+| Sleeping | SPA "waking up" message. The worker stops while asleep, and its jobs stay in the database | Render docs | Compatible, with limitations below |
+| Migrations | GitHub Actions migrates over a direct database connection, then calls Render's deploy hook | Render docs: pre-deploy commands are paid only. Deploy hooks state no plan restriction | Validate (check 4) |
+| Build minutes | Auto-deploy off. Deploy only after a merge to `main` | Render docs: without a payment method, builds stop for the month once the allowance is used | Limitation |
+| Blueprint file | If a `render.yaml` is used, it must say `plan: free` | Render docs: omitting `plan` creates a paid instance | Note |
+
+### Database provider (D12, proposed)
+
+| Option | Free terms on 2026-11-08 | Assessment | Verdict |
+|---|---|---|---|
+| **Neon Free, PostgreSQL** | Permanent and no card. 1 GB storage and 100 compute-hours a month per project. Scales to zero after 5 minutes idle and wakes in a few hundred milliseconds. PostgreSQL 14–18. Region chosen at creation (US East, US West, Frankfurt, London, Singapore, Sydney, São Paulo). TLS required, with a public CA. 6-hour restore window | Best fit. Needs care with compute hours, explained below | **Recommended** |
+| Aiven Free, PostgreSQL | No card and no time limit. 1 CPU, 1 GB RAM, 1 GB disk. **20 connections**, no pooling. Region not selectable. `verify-full` needs Aiven's private CA file, which Aiven rotates. Can be powered off when idle | Workable within these limits | Fallback |
+| Supabase Free | 500 MB, paused after a week without activity, no backups. Direct connections are IPv6 only, so IPv4 goes through its shared pooler. `verify-full` needs a downloaded certificate. **Its automatic data API must be disabled** so tables aren't reachable outside our application | More moving parts and more attack surface | Second fallback |
+| Render Free, PostgreSQL | Expires 30 days after creation | Not suitable for a lasting demo | Rejected |
+| Aiven Developer, MySQL | $5 a month, always on | The way to stay on MySQL | Rejected on cost |
+| Aiven Free, MySQL | No new services since 6 November 2026, and existing ones are deleted on 21 December 2026 | Unavailable | Not possible |
+
+**Direct connection, not the pooler.** Neon's pooled endpoint uses PgBouncer in *transaction mode*, which shares one database connection between clients transaction by transaction. That makes session-level features such as `SET` statements and session advisory locks unsafe. Laravel applies settings like `search_path` with `SET` after connecting. With only a few PHP-FPM workers, WorkFlow doesn't need pooling, so it uses Neon's direct endpoint and avoids those caveats. Laravel 13 documents pooled PostgreSQL connections if they're ever needed.
+
+**Compute hours.** The queue worker checks the jobs table every few seconds, so the database stays awake whenever the container is awake: at least 15 minutes after each visit. Capping Neon's compute at its smallest size of 0.25 units turns 100 compute-hours into about **400 awake hours a month**, roughly 13 hours a day. A portfolio demo should use far less. `robots.txt` blocks crawlers, and validation measures real usage. Neon's exact behaviour when the allowance runs out isn't documented in what I read, so it must be assumed that the database becomes unavailable until the next month.
+
+### Other hosting options evaluated
 
 | Option | Cookie auth | Security and architecture trade-off | Verdict |
 |---|---|---|---|
-| **One Docker service on Render free + Aiven free MySQL** | Works by design: one origin | No CORS surface and every part of routing is under our control. Both apps deploy together on this profile. Sleeps when idle | **Recommended** |
+| **One Docker service on Render free + Neon free PostgreSQL** | Works by design: one origin | No CORS surface and every part of routing is under our control. Both apps deploy together on this profile. Sleeps when idle | **Recommended** |
 | Render static site with a rewrite to a Render web service | Unverified | Keeps deployment separate, and the SPA loads while the API sleeps. **Render's docs allow a rewrite to a full URL but don't describe cookie, header or method handling** | Optional experiment only |
 | Vercel or Netlify frontend with a proxy rewrite to the API | Probably works, needs vendor check | Separate deployment, but adds a third provider, and the proxy changes `Host` and forwarded IP handling | Fallback |
-| Oracle Cloud Always Free VM with MySQL HeatWave | Works: one origin on a free DNS name | Real MySQL and no sleep, with a persistent worker. **You run and patch the server yourself.** Idle instances can be reclaimed, capacity can be unavailable, and the card requirement is unconfirmed | Fallback if sleeping is unacceptable |
+| Oracle Cloud Always Free VM with self-managed PostgreSQL | Works: one origin on a free DNS name | No sleep, with a persistent worker. **You run and patch the server yourself.** Idle instances can be reclaimed, capacity can be unavailable, and the card requirement is unconfirmed | Fallback if sleeping is unacceptable |
 | Railway | Works: one origin | The free plan's $1 monthly credit is too small for this always-running container. Its $5 Hobby plan is the simplest paid step | Best low-cost upgrade |
 | Separate services, `SameSite=None` cookies | Unreliable | Conflicts with Sanctum's documented domain requirement, and browsers increasingly restrict third-party cookies | Rejected |
 | Replace Sanctum cookies with bearer tokens | Changes the design | Tokens readable by JavaScript can be stolen through XSS, which is a security downgrade for hosting convenience | Rejected |
-| alwaysdata free | Works: one origin | MariaDB, not MySQL, so local and CI behaviour would differ. Long-running services are paid only | Rejected |
+| alwaysdata free | Works: one origin | Long-running services are paid only, and disk is 1 GB | Rejected |
 | InfinityFree | Unsuitable | Mandatory browser check affects non-browser clients. No queue workers or scheduled tasks are reported | Rejected |
 | Koyeb, Fly.io | Not applicable | Pricing pages show no free compute for new users | Rejected on cost |
 
@@ -466,16 +534,46 @@ The browser sees one origin, so cookies are first-party and the login flow match
 
 | Need | Solution | Limitation |
 |---|---|---|
-| Web app | Render free web service, Docker | Sleeps after 15 minutes without traffic, and wakes in about a minute. 750 free hours a month, enough for one service. May restart at any time. Render's docs say not to use free instances for production. **Docker on the free plan is confirmed by validation, as PHP needs it** |
-| Database | Aiven free MySQL 8.4 | 1 CPU, 1 GB RAM, 1 GB disk, 76 connections, one node, no SLA. Can be powered off when inactive after notice. Region may not be selectable, so Render's region is matched to it, and cross-provider latency is expected |
-| Queue worker | A second process in the same container | Runs only while awake, which is acceptable: jobs are created by requests, which wake the service. Unfinished jobs stay in the database and resume |
+| Web app | Render free web service, Docker | 512 MB RAM and 0.1 CPU, so responses are noticeably slower than locally. Sleeps after 15 minutes without traffic and wakes in about a minute. 750 free hours a month, enough for one service. May restart at any time. Render's docs say not to use free instances for production |
+| Database | Neon free PostgreSQL 18, direct connection, `verify-full` TLS | 1 GB storage, 100 compute-hours a month, no uptime guarantee, community support only. Region must match Render's, for example both in Frankfurt or both in Ohio |
+| Queue worker | A second process in the same container | Runs only while awake, which is acceptable: jobs are created by requests, which wake the service. Unfinished jobs stay in the database and resume. Keeps the database awake while running |
 | Scheduler and reset | GitHub Actions scheduled workflow, connecting to the database directly | Can be delayed. Disabled after 60 days without repository activity on a public repository |
-| Migrations | GitHub Actions job before deployment | No shell or one-off jobs on the free plan. Workflow secrets aren't exposed to pull requests from forks |
-| Email | Brevo HTTP API (`symfony/brevo-mailer`), as Render's free plan blocks SMTP ports 25, 465 and 587 | Resend requires an owned domain. **Brevo sending from a verified free-mail address, and its current quota, could not be confirmed from its docs, and such mail may reach spam** |
+| Migrations | GitHub Actions job before deployment | No pre-deploy command or shell on the free plan. Workflow secrets aren't exposed to pull requests from forks |
+| Email | Demo mailbox on the live demo (D13) | Render's free plan blocks SMTP ports 25, 465 and 587. Resend requires an owned domain. Brevo's free sender rules couldn't be confirmed. Real delivery stays built, for use with a domain later |
 | Files | None stored in V1 | The disk is wiped on restart, spin-down and redeploy |
 | Logs | `stderr` to Render logs | Limited retention |
 
-**Why Render isn't used for the database:** its free data offering is Postgres, not MySQL, and the free Postgres database expires after 30 days.
+### Environment variables and secrets
+
+| Setting | Where it's stored | Note |
+|---|---|---|
+| `APP_KEY`, `DB_PASSWORD` | Render environment and GitHub Actions secrets | Never in the repository or the image |
+| `DB_CONNECTION=pgsql`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME` | Render environment and GitHub Actions secrets | Neon's direct, non-pooled endpoint |
+| `DB_SSLMODE=verify-full`, `DB_SSLROOTCERT=/etc/ssl/certs/ca-certificates.crt` | Render environment | Mapped into the `pgsql` connection configuration. With the Aiven fallback, its CA is uploaded as a Render secret file under `/etc/secrets/` |
+| `APP_URL`, `SANCTUM_STATEFUL_DOMAINS`, `SESSION_*` | Render environment | See section 6 |
+| `DEMO_MODE=true`, demo mail driver | Render environment | Off everywhere except the demo |
+| `VITE_API_BASE_URL=/api/v1` | Frontend build setting | Compiled into public JavaScript. Never a secret |
+
+### Environment parity
+
+**One rule: PostgreSQL 18 everywhere.** When the major version changes, local, CI and the hosted database move together in one pull request. WorkFlow never uses SQLite, even for quick tests, and Laragon's MySQL is no longer used for this project.
+
+| | Local, Windows | CI | Live demo |
+|---|---|---|---|
+| PostgreSQL | 18, EDB installer, running as a Windows service | `postgres:18` service container | Neon, version 18 chosen at project creation |
+| PHP | 8.3 from Laragon with `pdo_pgsql` and `pgsql` enabled | 8.3 | 8.3-FPM in the image |
+| Database TLS | Not used on `localhost` | Not used | `verify-full` |
+| Mail | Local mail catcher, or demo-mailbox mode to rehearse the demo | Laravel's mail fake | Demo mailbox |
+| Origin | Vite proxy gives one origin | Not applicable | One origin |
+
+**Setting up PostgreSQL on Windows (Phase 2):**
+
+1. Install PostgreSQL 18 with the EDB installer from postgresql.org, which includes pgAdmin and the `psql` command-line tool. Keep port 5432 and record the `postgres` password in a password manager.
+2. Create a `workflow` login role and two databases, `workflow` and `workflow_test`, owned by it. The application never connects as `postgres`.
+3. Enable `pdo_pgsql` and `pgsql` in Laragon's PHP settings, and confirm with `php -m`. They normally ship with Windows PHP builds, but this hasn't been confirmed for your installation.
+4. Set `DB_CONNECTION=pgsql` and the matching values in `backend/.env`.
+
+Running the production container locally with Docker Desktop is optional. CI builds and checks it either way.
 
 ### Phase 2 hosting validation
 
@@ -483,28 +581,46 @@ These are unverified until tried on real accounts. Each is a gate before later w
 
 | # | Check | If it fails |
 |---|---|---|
-| 1 | Docker image with Nginx, PHP-FPM and a worker deploys and stays within Render free memory | Reduce workers, then use Railway Hobby or Oracle |
-| 2 | Laravel connects to Aiven over verified TLS, and the region latency is tolerable | Evaluate Oracle HeatWave |
-| 3 | Aiven accepts composite foreign keys, the generated column, `CHECK` and `SELECT ... FOR UPDATE` | Evaluate Oracle HeatWave. **The database safeguards are not weakened** |
-| 4 | All migrations, including framework tables, pass with `sql_require_primary_key` on | Fix the migrations, or change the setting if the free plan allows |
-| 5 | The real Sanctum cookie flow works on the live URL (completed in Phase 3) | Diagnose proxy settings. Don't change the authentication method without your approval |
-| 6 | Laravel sees the real client IP and ignores a spoofed `X-Forwarded-For` | Key limits on email or user and adjust the trusted proxy settings |
-| 7 | Brevo delivers to Gmail and Outlook from a verified address | Fallback below |
-| 8 | Scheduled migration or reset workflow reaches Aiven from GitHub Actions | Trigger manually, or use the fallback hosting |
+| 1 | The Docker image deploys on the Free plan and fits in 512 MB with about three PHP-FPM workers and the queue worker. Response times at 0.1 CPU are tolerable | Fewer workers. Then Railway Hobby or Oracle |
+| 2 | Laravel connects to Neon's direct endpoint over IPv4 with `verify-full`, with acceptable latency in a shared region | Aiven PostgreSQL fallback |
+| 3 | Tenant constraint and locking tests pass against Neon: composite foreign keys, partial and expression unique indexes, `CHECK`, `FOR UPDATE` | Aiven PostgreSQL fallback. **The database safeguards are not weakened** |
+| 4 | GitHub Actions migrates the database, then triggers Render's deploy hook, with auto-deploy off | Manual deployment from the Render dashboard after migrating |
+| 5 | The real Sanctum cookie flow works on the live URL (Phase 3) | Diagnose proxy settings. The authentication method isn't changed without your approval |
+| 6 | Logged request headers show which forwarded headers Render sends. Laravel sees the real client IP, and a spoofed `X-Forwarded-For` is ignored | Key limits on email or user, and adjust the trusted proxy settings |
+| 7 | Registration, verification and invitation work through the demo mailbox on the live URL (Phase 3) | Fix the demo mode. No external provider is involved |
+| 8 | After a week of normal use, Neon's compute-hour usage is within the allowance | Increase the worker's sleep interval or move to the fallback |
+| 9 | The scheduled reset reaches Neon from GitHub Actions | Trigger it manually |
 
-**Email fallback:** verification and invitations remain fully built and tested in CI and locally with a mail catcher. The live demo disables public registration and offers only seeded, already verified accounts. The README explains why. A low-cost domain can later unlock normal sending through Resend.
+### Demo safety
+
+| Requirement | How the demo meets it |
+|---|---|
+| Demonstration data only | Seeded fictional organisations and people. A banner and the sign-up page warn against entering real information, and say data is deleted nightly |
+| No real customer information | In demo mode, registration and invitations accept only `@workflow.test` addresses. `.test` is reserved by internet standards, so these addresses can never receive mail, and no real address is ever collected |
+| Wake-up delays explained | README notice, plus the SPA's "waking up" message |
+| Safe public registration | Allowed only for reserved addresses, rate limited, and switchable off in configuration if abused |
+| Safe demo accounts | One seeded account per role, plus a second workspace to show isolation. Logins appear on the login page. Demo accounts can't change their email or password, or send invitations |
+| Email-based features still demonstrable | The demo mailbox shows verification and invitation emails, so visitors can complete those flows |
+| Reset strategy | Nightly GitHub Actions job rebuilds the database from migrations and seeders, clearing all data, the mailbox and sessions. It refuses to run unless demo mode is on, and can be triggered manually |
+| Real application unchanged | Outside demo mode: any email domain, real mail delivery, and no mailbox routes |
 
 ### Moving to a custom domain or VPS later
 
 | Step | Change required | Application code changed? |
 |---|---|---|
-| Add a custom domain to the same service | DNS and `APP_URL`, stateful domains, trusted hosts. Send email from the domain | No |
+| Add a custom domain to the same service | DNS and `APP_URL`, stateful domains, trusted hosts. Turn off demo mode and configure a real mail provider | No |
+| Change database provider or plan | Connection environment values and, for a private CA, its certificate file | No |
 | Move to a paid plan | Remove sleep. Split the worker into its own service | No |
 | Move to a VPS or split `app.` and `api.` | Environment values in section 6, Nginx and deployment scripts. CORS enabled through configuration, with a CORS test added | No |
-| Prepare for commercial SaaS | Real backups, monitoring, managed database, deletion features, legal review | Yes: V1.1 features |
+| Prepare for commercial SaaS | Real backups, monitoring, managed database plan, deletion features, legal review | Yes: V1.1 features |
 
-To keep this true, these rules apply from Phase 2: no hard-coded hostnames, all origin and cookie settings come from the environment, the frontend talks to Laravel only through the HTTP API, and no provider-specific code enters `app/`.
+To keep this true, these rules apply from Phase 2:
+
+- no hard-coded hostnames,
+- all origin, cookie and database settings come from the environment,
+- the frontend talks to Laravel only through the HTTP API,
+- no provider-specific code enters `app/`.
 
 ### How to explain this in an interview
 
-> "Sanctum's session cookies need the SPA and API on the same site, but shared hosting domains are on the Public Suffix List, so two separately hosted services can't share a cookie. Rather than downgrade to bearer tokens in JavaScript-readable storage, I served both from one origin through Nginx path routing. The apps stay separate in code and CI, and the cookie settings are environment-driven, so moving to subdomains on a real domain is a configuration change. The trade-offs are cold starts and no uptime guarantee, which is acceptable for a portfolio demo but not for customers. Before commercial use I'd move to paid infrastructure with backups and monitoring."
+> "Sanctum's session cookies need the SPA and API on the same site. Free hosting domains are on the Public Suffix List, so two separately hosted services can't share a cookie. Rather than downgrade to bearer tokens in JavaScript-readable storage, I served both from one origin through Nginx path routing in a single container. The apps stay separate in code and CI, and all origin, cookie and database settings come from the environment. When the free MySQL tier I'd planned on was retired, I evaluated PostgreSQL against the design's database constraints before switching, and I run the same version locally, in CI and in the demo. For email without a domain, the demo uses reserved test addresses and an in-app mailbox, so it never collects real personal data. The trade-offs are cold starts and no uptime guarantee: fine for a demo, not for customers."

@@ -1,6 +1,6 @@
 # 06 — Testing Strategy
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08
 
 ---
 
@@ -8,7 +8,7 @@
 
 1. **Security rules get written as tests first.** Tenant isolation and permissions are specified as tests before or alongside the feature, never added later.
 2. **Most confidence comes from API feature tests.** They exercise routing, middleware, validation, policies and the database together, which is where this application's risk sits.
-3. **Tests run on MySQL, not SQLite.** Composite foreign keys, generated columns, `CHECK` constraints and locking are central to the design and differ between engines.
+3. **Tests run on PostgreSQL 18, the same engine and major version as the hosted database, never SQLite.** Composite foreign keys, partial indexes, `CHECK` constraints, case sensitivity and locking are central to the design and differ between engines.
 4. **Guard tests catch what people forget.** A new route should fail CI automatically until it has isolation coverage.
 5. **A passing test suite doesn't prove the system is secure.** It proves the listed scenarios behave as specified.
 
@@ -78,7 +78,10 @@ e2e/                                  Playwright flows
 | Same-origin GET with a `Referer` but no `Origin` | Authenticated through the session |
 | Request with an untrusted `Host` header | Rejected |
 | Demo account changes password or email, or sends an invitation | 403 `demo_restricted` |
-| Registration while the email fallback is active | 403 `registration_disabled` |
+| Registration while switched off in configuration | 403 `registration_disabled` |
+| Demo mode: registration or invitation for an address outside `workflow.test` | 422 |
+| Demo mode: verification email | Appears in the demo mailbox, and its link verifies the account |
+| Outside demo mode: `/demo/mailbox` | 404, and email goes to the configured mail driver |
 | Tampered or expired verification link | Rejected |
 
 ### Invitations
@@ -115,6 +118,18 @@ For each write endpoint, a dataset covering missing required fields, wrong types
 - Members can't reach a Completed task through any route except those allowed.
 - The demo reset command refuses to run unless demo mode is enabled, and rebuilds a working demo from empty when it is.
 
+### PostgreSQL-specific tests
+
+| Behaviour | Test |
+|---|---|
+| Case-insensitive email uniqueness | Registering `Ada@x.test` after `ada@x.test` fails, including through a direct insert |
+| Case-insensitive search | `q=LOGIN` finds "Login page", and `%` and `_` match literally |
+| Partial unique invitation index | A second open invitation for the same email fails. One after acceptance or revocation succeeds |
+| Unique violation inside a transaction | A duplicate invitation acceptance returns 409, and the request's other work rolls back cleanly instead of failing with "current transaction is aborted" |
+| Row locking | The last-Administrator check locks the Administrator rows, then counts them in PHP, as PostgreSQL rejects `FOR UPDATE` with aggregate functions |
+| Status `CHECK` constraints | A direct insert of an unknown status fails |
+| Migrations | Migrate from empty, roll back and migrate again |
+
 ### Performance guard
 
 List endpoints run with `preventLazyLoading` enabled, and key endpoints assert a query count that doesn't grow with the number of rows.
@@ -149,6 +164,7 @@ The 404 body must also be **identical** to the response for an ID that doesn't e
 | Middleware presence | A workspace route lacks `auth:sanctum` or `ResolveWorkspace` |
 | Schema coverage | A table with neither `workspace_id` nor an explicit entry on the global-table allow-list exists |
 | Model coverage | A model with a `workspace_id` column lacks the `BelongsToWorkspace` trait |
+| Foreign key indexes | Any foreign key has no index starting with its columns, checked through PostgreSQL's system catalogue |
 
 ### Part C: database constraint tests
 
@@ -237,7 +253,7 @@ GitHub Actions runs on every pull request to `main`.
 
 | Job | Steps |
 |---|---|
-| Backend | PHP 8.3, MySQL 8.4 service with `sql_require_primary_key` on, `composer audit`, Pint check, migrate from empty, full test suite |
+| Backend | PHP 8.3, `postgres:18` service container, `composer audit`, Pint check, migrate from empty, full test suite |
 | Frontend | Node 22, `npm audit --audit-level=high`, ESLint, Vitest, production build |
 | Container | Build the demo image, check `/up` responds, check that a client-side route serves the SPA |
 | End to end | Playwright smoke flows on pull requests to `main` |
@@ -250,8 +266,9 @@ Automated CI can't prove the behaviour of the real hosting. These run manually a
 - A write without a CSRF token is rejected.
 - Rate limits use the real client IP, and a spoofed `X-Forwarded-For` has no effect.
 - Tenant isolation constraint tests pass against the hosted database.
+- The database connection uses TLS with `verify-full`.
 - Waking from sleep works, in a browser, with an open tab.
-- The email flow works, or the documented fallback is active.
+- Registration, verification and invitation work through the demo mailbox.
 - The nightly reset ran and the demo remains usable.
 
 ---

@@ -1,6 +1,6 @@
 # 05 — API Specification
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Base URL:** `/api/v1`, on the same origin as the SPA
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Base URL:** `/api/v1`, on the same origin as the SPA
 
 This is the V1 API contract. Permission names refer to the [permissions matrix](04-permissions-matrix.md). On the demo, the full URL is `https://<service>.onrender.com/api/v1`. The contract doesn't change if the API later moves to its own hostname.
 
@@ -77,7 +77,7 @@ The server doesn't remember a selected workspace between requests. No request bo
 | 403 | `forbidden` | Authenticated and may see the resource, but may not perform this action |
 | 403 | `email_not_verified` | The action requires a verified email |
 | 403 | `demo_restricted` | A seeded demo account attempted a restricted action |
-| 403 | `registration_disabled` | Public registration is off because the email fallback is active |
+| 403 | `registration_disabled` | Registration is switched off in configuration, for example during abuse |
 | 404 | `not_found` | Doesn't exist, **or the user isn't allowed to know that it exists** |
 | 409 | `last_administrator`, `project_archived`, `last_project_manager`, `already_member`, `invitation_pending` | Valid request that conflicts with current state |
 | 410 | `invitation_invalid` | Token expired, revoked or already used |
@@ -104,6 +104,10 @@ The server doesn't remember a selected workspace between requests. No request bo
 | PATCH | `/me` | Update profile | User | |
 | PUT | `/me/password` | Change password | User | 5/hour per user |
 | GET | `/me/notifications/summary` | Unread count per workspace | User | |
+| GET | `/demo/mailbox` | List demo emails, newest first | Public, **demo mode only** | 60/min per IP |
+| GET | `/demo/mailbox/{id}` | Read one demo email, including its links | Public, **demo mode only** | 60/min per IP |
+
+**Demo mode rules (D13):** in demo mode, `email` fields in registration and invitations must end in `@workflow.test`, or the request fails with 422. Outside demo mode, the mailbox routes are not registered, so they return 404 like any unknown URL.
 
 ### `POST /auth/login`
 
@@ -307,7 +311,7 @@ The 422 message is the same for a nonexistent user and a user in another workspa
 | DELETE | `/workspaces/{slug}/tasks/{id}` | Soft delete | Manager |
 | POST | `/workspaces/{slug}/tasks/{id}/restore` | Restore | Manager |
 
-**List filters:** `status`, `priority`, `assignee` (a user ID, `me` or `none`), `due_before`, `due_after`, `overdue`, `q`, `sort` (`due_date`, `priority`, `created_at`, `updated_at`).
+**List filters:** `status`, `priority`, `assignee` (a user ID, `me` or `none`), `due_before`, `due_after`, `overdue`, `q` (case-insensitive title search), `sort` (`due_date`, `priority`, `created_at`, `updated_at`).
 
 ### `POST /workspaces/{slug}/projects/{id}/tasks`
 

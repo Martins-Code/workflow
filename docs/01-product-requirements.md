@@ -1,6 +1,6 @@
 # 01 — Product Requirements
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Applies to:** WorkFlow Version 1
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Applies to:** WorkFlow Version 1
 
 Related: [Architecture](02-system-architecture.md) · [Database](03-database-design.md) · [Permissions](04-permissions-matrix.md) · [API](05-api-specification.md) · [Testing](06-testing-strategy.md) · [Roadmap](07-development-roadmap.md)
 
@@ -31,7 +31,7 @@ WorkFlow is **a portfolio project first**, with the possibility of becoming a Sa
 
 ## 2. Confirmed decisions
 
-D1–D6 and D8–D11 were confirmed on 2026-11-05. D7 was revised on the same date to a portfolio-first, low-cost strategy. Its direction is confirmed, and the named providers depend on the hosting validation in Phase 2.
+D1–D11 were confirmed on 2026-11-05, including D7's portfolio-first, low-cost direction. On 2026-11-08, Aiven stopped offering new free MySQL services, so D7's database provider changed, and **D12 and D13 were added for your approval.** The named providers still depend on the hosting validation in Phase 2.
 
 | ID | Question | Confirmed decision | Why | Cost of the alternative |
 |---|---|---|---|---|
@@ -41,7 +41,9 @@ D1–D6 and D8–D11 were confirmed on 2026-11-05. D7 was revised on the same da
 | **D4** | One assignee per task, or several? | **One** (`tasks.assignee_id`, nullable). | Clear ownership and simpler notifications, "my tasks" and reports. | Multiple assignees need a join table and an answer to "who can complete it?". Moving to a join table later is a contained migration. |
 | **D5** | How is the active workspace identified on API requests? The brief implies a selected "active" workspace. | **In the URL path:** `/api/v1/workspaces/{slug}/...`. "Active workspace" is then a frontend idea, not server session state. | A workspace stored in the session breaks when two tabs show different workspaces: a user can act on the wrong organisation's data without noticing. See ADR-03. | A header works technically but is less visible, less testable and does not fit Laravel's route binding as well. |
 | **D6** | Require email verification? It is not in the brief. | **Yes, in V1.** | Without it, someone can register with another person's address before that person is invited (account pre-hijacking). | Skipping it removes one flow but leaves that attack open and makes invitation matching less trustworthy. |
-| **D7** | Where is the demo hosted, with no purchased domain or paid VPS? | **Free hosting on a single origin.** One Docker web service on Render's free plan serves the React build and the Laravel API from `https://<service>.onrender.com`. Aiven's free plan provides MySQL 8.4. Providers are confirmed only after Phase 2 validation. | Sanctum cookie authentication is kept unchanged. Using one origin avoids the cross-site cookie problem on shared platform domains. See [architecture, section 10](02-system-architecture.md#10-hosting-strategy). | The demo sleeps after 15 minutes idle and takes about a minute to wake. It isn't production hosting. A custom domain or VPS can be added later through configuration. |
+| **D7** | Where is the demo hosted, with no purchased domain or paid VPS? | **Free hosting on a single origin.** One Docker web service on Render's free plan serves the React build and the Laravel API from `https://<service>.onrender.com`. Neon's free plan provides PostgreSQL (D12). Providers are confirmed only after Phase 2 validation. | Sanctum cookie authentication is kept unchanged. Using one origin avoids the cross-site cookie problem on shared platform domains. See [architecture, section 10](02-system-architecture.md#10-hosting-strategy). | The demo sleeps after 15 minutes idle and takes about a minute to wake. It isn't production hosting. A custom domain or VPS can be added later through configuration. |
+| **D12** *(proposed)* | Which database engine, now that free MySQL hosting is unavailable? | **PostgreSQL 18 everywhere:** locally, in CI and on Neon's free plan, with Aiven's free PostgreSQL as the fallback. | It keeps hosting free while preserving every database-level tenant safeguard, and it improves two of them. See [database design, section 7](03-database-design.md#7-postgresql-design-notes). | Paying $5 a month for Aiven's MySQL Developer plan would keep MySQL. PostgreSQL means learning its differences in case handling, locking errors and indexing. |
+| **D13** *(proposed)* | How does the free demo show email-based features without a domain or email provider? | **An in-app demo mailbox.** In demo mode, sign-up accepts only addresses on the reserved `workflow.test` domain, which can never receive real mail, and verification and invitation emails appear in a demo mailbox page. | No email provider or domain is needed, and no real email addresses are ever collected. The real flows can still be demonstrated. | The mailbox is public, so any visitor can read demo messages. That's acceptable only because the addresses and data are fictional and reset nightly. Real email delivery is still built and tested, but not used on the demo. |
 | **D8** | One repository or two? | **One repository** (monorepo) with `backend/` and `frontend/`, still built and deployed independently. | You already have one repo. A feature branch can contain its API and UI together, and recruiters find everything in one place. | Two repos show stricter separation but split every feature across two branches and two pull requests. |
 | **D9** | Should workspaces, projects and user accounts be deletable? The brief only says "archive" for projects. | **Not in V1.** Projects archive. Tasks and comments soft-delete. Workspace and account deletion move to V1.1. | Correct deletion cascades, retention and privacy handling are a substantial feature. | Real users would need this, and **UK/EU privacy law may require account erasure in production**. It must be built before WorkFlow holds real customer data. |
 | **D10** | Should descriptions and comments support rich text? | **Plain text** in V1, displayed with preserved line breaks. | Removes the largest source of stored XSS. | Markdown needs a sanitising pipeline. It is a good V1.1 feature. |
@@ -63,7 +65,7 @@ These have sensible defaults and don't need a decision now, but the brief did no
 | Removing the last Administrator | Blocked |
 | Platform-wide support or super-admin access | None in V1. Support would use audited database procedures |
 | Public demo abuse | Seeded demo accounts, nightly reset of all data, email disabled for demo accounts |
-| Email without an owned domain | Send through an HTTP email API from a verified sender, with a documented fallback if this fails validation ([architecture, section 10](02-system-architecture.md#10-hosting-strategy)) |
+| Email without an owned domain | Demo mailbox on the live demo (D13). Real email delivery remains in the application for later use with a domain |
 
 ---
 
@@ -159,6 +161,8 @@ Priority is **M** (must have for V1) or **S** (should have, may slip without fai
 | FR-H3 | All demo data resets nightly. The reset refuses to run unless demo mode is explicitly enabled | M |
 | FR-H4 | A permanent banner and the sign-up page state that data is deleted nightly and that real or sensitive data must not be entered | M |
 | FR-H5 | If the API is waking up, the SPA shows a clear "waking up" message and retries, not an error | M |
+| FR-H6 | In demo mode, registration and invitations accept only addresses on the reserved `workflow.test` domain, so no real email address is collected (D13) | M |
+| FR-H7 | In demo mode, emails are stored in a demo mailbox page instead of being sent. Outside demo mode the mailbox doesn't exist, and emails are delivered normally | M |
 
 ---
 
@@ -199,7 +203,7 @@ Targets are deliberately modest and measurable on the seeded dataset: 10 workspa
 | Responsive design | Usable from 360 px wide upwards. On small screens Kanban shows one column at a time |
 | Error handling | Consistent API error format with a `request_id`. The UI always shows a loading, empty, error or success state |
 | Logging | Structured logs with request ID, user ID and workspace ID. Passwords, tokens and session IDs are never logged |
-| Backup and recovery | Demo data is disposable, so recovery means rebuilding from migrations and seeders, **rehearsed before release**. The provider's backups are a bonus, not relied on. Real backups with recovery targets are required before commercial use |
+| Backup and recovery | Demo data is disposable, so recovery means rebuilding from migrations and seeders, **rehearsed before release**. Neon's 6-hour restore window on its free plan is a bonus, not relied on. Real backups with recovery targets are required before commercial use |
 | Deployment | Backend and frontend keep separate code, dependencies, configuration, tests and CI jobs. The free profile packages both builds into one image for one origin. Pending migrations run as an explicit deployment step. Moving to separate deployment requires configuration and deployment changes, not application redesign |
 | Documentation | README with setup instructions, these documents kept current, architecture decisions recorded |
 
@@ -245,7 +249,7 @@ V1 is ready to merge and release only when **all** of these are true.
 
 **Engineering**
 
-13. CI passes on `main`: backend tests against real MySQL, frontend tests, linting and dependency audit.
+13. CI passes on `main`: backend tests against real PostgreSQL 18, frontend tests, linting and dependency audit.
 14. Three end-to-end smoke flows pass against a production-like build.
 15. The demo database has been rebuilt from empty using migrations and seeders, and a dump has been restored to a separate database.
 16. The live demo works over HTTPS on its platform URL, and a new developer can follow the README to run the project locally.

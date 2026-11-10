@@ -1,6 +1,6 @@
 # 04 — Permissions Matrix
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Depends on:** confirmed decisions D1, D2, D3, D9, D11
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Depends on:** confirmed decisions D1, D2, D3, D9, D11
 
 ---
 
@@ -100,6 +100,8 @@ Archived projects are read-only for **everyone, including Administrators**. The 
 ### Demo accounts
 
 Seeded demo accounts follow the same matrix for their role, plus these restrictions in every workspace: they cannot change their email or password, and cannot send or resend invitations. These attempts return 403 with code `demo_restricted`. Demo restrictions only ever remove abilities, and they never bypass tenant checks.
+
+The demo mailbox (D13) is deliberately public, but only in demo mode, and it only ever contains messages to reserved `workflow.test` addresses. It is not a permission exception for any workspace data.
 
 ---
 

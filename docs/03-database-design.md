@@ -1,6 +1,6 @@
 # 03 — Database Design
 
-**Status:** Revised, awaiting final approval · **Date:** 2026-11-05 · **Engine:** MySQL 8.4, InnoDB, `utf8mb4`
+**Status:** Revised, awaiting final approval · **Date:** 2026-11-08 · **Engine:** PostgreSQL 18, UTF-8 (D12, proposed)
 
 ---
 
@@ -31,10 +31,10 @@ erDiagram
         bigint id PK
         string name
         string email UK
-        timestamp email_verified_at
+        timestamptz email_verified_at
         string password
-        timestamp created_at
-        timestamp updated_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     WORKSPACES {
         bigint id PK
@@ -43,18 +43,18 @@ erDiagram
         text description
         string timezone
         bigint created_by FK
-        timestamp created_at
-        timestamp updated_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     WORKSPACE_MEMBERS {
         bigint id PK
         bigint workspace_id FK
         bigint user_id FK
         string role
-        timestamp joined_at
-        timestamp last_accessed_at
-        timestamp created_at
-        timestamp updated_at
+        timestamptz joined_at
+        timestamptz last_accessed_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     WORKSPACE_INVITATIONS {
         bigint id PK
@@ -63,12 +63,11 @@ erDiagram
         string role
         char token_hash UK
         bigint invited_by FK
-        timestamp expires_at
-        timestamp accepted_at
-        timestamp revoked_at
-        string pending_email "generated column"
-        timestamp created_at
-        timestamp updated_at
+        timestamptz expires_at
+        timestamptz accepted_at
+        timestamptz revoked_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     PROJECTS {
         bigint id PK
@@ -80,9 +79,9 @@ erDiagram
         date start_date
         date due_date
         bigint created_by FK
-        timestamp archived_at
-        timestamp created_at
-        timestamp updated_at
+        timestamptz archived_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     PROJECT_MEMBERS {
         bigint id PK
@@ -91,8 +90,8 @@ erDiagram
         bigint user_id FK
         string role
         bigint added_by FK
-        timestamp created_at
-        timestamp updated_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     TASKS {
         bigint id PK
@@ -106,10 +105,10 @@ erDiagram
         bigint assignee_id FK
         bigint created_by FK
         date due_date
-        timestamp completed_at
-        timestamp deleted_at
-        timestamp created_at
-        timestamp updated_at
+        timestamptz completed_at
+        timestamptz deleted_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     TASK_COMMENTS {
         bigint id PK
@@ -117,10 +116,10 @@ erDiagram
         bigint task_id FK
         bigint author_id FK
         text body
-        timestamp edited_at
-        timestamp deleted_at
-        timestamp created_at
-        timestamp updated_at
+        timestamptz edited_at
+        timestamptz deleted_at
+        timestamptz created_at
+        timestamptz updated_at
     }
     ACTIVITY_LOGS {
         bigint id PK
@@ -130,17 +129,17 @@ erDiagram
         string action
         string subject_type
         bigint subject_id
-        json properties
-        timestamp created_at
+        jsonb properties
+        timestamptz created_at
     }
     NOTIFICATIONS {
         bigint id PK
         bigint workspace_id FK
         bigint user_id FK
         string type
-        json data
-        timestamp read_at
-        timestamp created_at
+        jsonb data
+        timestamptz read_at
+        timestamptz created_at
     }
 ```
 
@@ -167,7 +166,7 @@ A duplicated value can become inconsistent. A bug could insert a task with `work
 
 ```sql
 -- Illustrative only. Actual schema changes are made through migrations in later phases.
-ALTER TABLE projects ADD UNIQUE KEY uq_projects_ws_id (workspace_id, id);
+ALTER TABLE projects ADD CONSTRAINT uq_projects_ws_id UNIQUE (workspace_id, id);
 
 ALTER TABLE tasks ADD CONSTRAINT fk_tasks_project
   FOREIGN KEY (workspace_id, project_id)
@@ -176,9 +175,13 @@ ALTER TABLE tasks ADD CONSTRAINT fk_tasks_project
 
 Now that bad row is **impossible at the database level**, even if the application has a bug. This is a strong feature to discuss in an interview, as many multi-tenant applications never add it.
 
-### A MySQL limitation to remember
+### Why nullable composite references use `RESTRICT`
 
-`ON DELETE SET NULL` on a composite foreign key tries to set *every* column to null. `workspace_id` cannot be null, so this action cannot work here. Composite keys on nullable references therefore use `RESTRICT`, and the application clears the value inside a transaction first. That's why `RemoveWorkspaceMember` must unassign tasks before removing memberships.
+A plain `ON DELETE SET NULL` on a composite foreign key would null *every* column, including `workspace_id`, which can't be null. PostgreSQL 15 and later can null only named columns, for example `ON DELETE SET NULL (assignee_id)`. **We still choose `RESTRICT`**, and the application clears the value in a transaction first. Removing a member is a business operation that must also write activity records and handle soft-deleted tasks. `RESTRICT` makes any forgotten step fail loudly instead of being handled silently. That's why `RemoveWorkspaceMember` must unassign tasks before removing memberships.
+
+### Foreign keys need their own indexes in PostgreSQL
+
+MySQL automatically indexes the columns of a foreign key, but **PostgreSQL doesn't.** Without an index, deleting or locking a parent row has to scan the child table. Every foreign key below therefore has an explicit index whose leading columns match it, and a guard test fails if any foreign key lacks one.
 
 ---
 
@@ -186,9 +189,11 @@ Now that bad row is **impossible at the database level**, even if the applicatio
 
 **Conventions**
 
-- Primary keys are `BIGINT UNSIGNED AUTO_INCREMENT`.
-- Status and role columns are `VARCHAR(32)` backed by PHP enums. MySQL `ENUM` columns require a table alteration to add a value.
-- Calendar-only values use `DATE`. Moments in time use `TIMESTAMP` in UTC.
+- Primary keys are 64-bit auto-incrementing integers, from Laravel's `id()`. PostgreSQL has no unsigned integers.
+- Status and role columns are `VARCHAR` with a `CHECK` constraint listing the allowed values, backed by PHP enums. Adding a value means changing the constraint in a migration, which is deliberate.
+- Calendar-only values use `DATE`. Moments in time use `TIMESTAMPTZ` (Laravel's `timestampsTz()`), stored in UTC.
+- Structured values use `JSONB`, PostgreSQL's indexed binary JSON format.
+- Text comparison is **case-sensitive** in PostgreSQL, unlike MySQL's default, so case-insensitive rules are explicit.
 
 ### `users` — global, not tenant-owned
 
@@ -196,7 +201,7 @@ Now that bad row is **impossible at the database level**, even if the applicatio
 |---|---|
 | `id` | PK |
 | `name` | `VARCHAR(120)` |
-| `email` | `VARCHAR(255)`, unique. The case-insensitive collation prevents `A@x.com` and `a@x.com` from both registering |
+| `email` | `VARCHAR(255)`, stored lowercase by the application. A unique index on `lower(email)` guarantees `A@x.com` and `a@x.com` can't both register, even if a code path forgets to lowercase |
 | `email_verified_at` | Nullable timestamp |
 | `password` | `VARCHAR(255)`, hash only |
 | `created_at`, `updated_at` | Timestamps |
@@ -245,13 +250,12 @@ Now that bad row is **impossible at the database level**, even if the applicatio
 | `invited_by` | FK `users.id`, RESTRICT |
 | `expires_at` | Timestamp |
 | `accepted_at`, `revoked_at` | Nullable timestamps |
-| `pending_email` | Generated: `email` while neither accepted nor revoked, otherwise `NULL` |
 | `created_at`, `updated_at` | Timestamps |
 
-**Unique:** `token_hash`; `(workspace_id, pending_email)`.
-**Indexes:** `(workspace_id, created_at)`, `(email)`.
+**Unique:** `token_hash`; a **partial unique index** on `(workspace_id, lower(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL`.
+**Indexes:** `(workspace_id, created_at)`, `(lower(email))`.
 
-**Why `pending_email` exists:** the rule is "one *open* invitation per email per workspace", while keeping past ones as history. MySQL has no partial unique indexes, but its unique indexes allow many `NULL` values, so a generated column provides the same behaviour. Re-inviting after expiry updates the existing row with a new token.
+**Why a partial index:** the rule is "one *open* invitation per email per workspace", while keeping past ones as history. A partial index enforces uniqueness only for rows matching its `WHERE` clause, so accepted and revoked invitations don't count. This is simpler than MySQL's generated-column workaround, which is no longer needed. Laravel's schema builder doesn't document partial or expression indexes, so this index is created with a short raw SQL statement in its migration. Re-inviting after expiry updates the existing row with a new token.
 
 ### `projects`
 
@@ -331,7 +335,7 @@ Administrators have implicit access to all projects and do **not** need a row he
 
 **Soft deletion caution:** soft-deleted tasks still hold their foreign key. Removing a member must clear `assignee_id` on deleted tasks too (`withTrashed()`), or the `RESTRICT` blocks the removal.
 
-**Search:** `LIKE` on title, always filtered by project or workspace first. A `FULLTEXT` index can follow if measurement shows a need.
+**Search:** case-insensitive `ILIKE` on title, always filtered by project or workspace first. PostgreSQL full-text search or a trigram index can follow if measurement shows a need.
 
 **Kanban position:** new cards take the column's maximum + 65,536. Moving a card between two others takes the midpoint. When no integer gap remains, the server renumbers that column in a transaction. This means a normal move updates one row, not a whole column.
 
@@ -362,7 +366,7 @@ Administrators have implicit access to all projects and do **not** need a row he
 | `properties` | JSON: changed values plus a snapshot such as the task title |
 | `created_at` | No `updated_at`, as rows never change |
 
-**Foreign keys:** `(workspace_id, project_id)` → `projects (workspace_id, id)`, RESTRICT. MySQL skips the check when `project_id` is `NULL`.
+**Foreign keys:** `(workspace_id, project_id)` → `projects (workspace_id, id)`, RESTRICT. The check is skipped when `project_id` is `NULL`, which is PostgreSQL's default `MATCH SIMPLE` behaviour.
 **Indexes:** `(workspace_id, created_at)`, `(project_id, created_at)`, `(subject_type, subject_id, created_at)`.
 
 **Why polymorphic here:** the log references many kinds of record, and new kinds will appear. The trade-off is that the subject has no foreign key. That's acceptable for a historical record: the snapshot in `properties` keeps entries readable after the subject changes, and `project_id` retains a real constraint where visibility depends on it.
@@ -387,6 +391,18 @@ Administrators have implicit access to all projects and do **not** need a row he
 Standard Laravel tables, not tenant-owned and not exposed through the API: `sessions`, `password_reset_tokens`, `jobs`, `failed_jobs`, `job_batches`, `cache`, `cache_locks`, `migrations`.
 
 **Queue job payloads contain tenant data**, so they get the same access control and backup treatment as the application's tables.
+
+### `demo_mail_messages` — demo mode only, not tenant-owned
+
+| Column | Definition |
+|---|---|
+| `id` | PK |
+| `to_email` | `VARCHAR(255)`. Always an `@workflow.test` address |
+| `subject` | `VARCHAR(255)` |
+| `body_text` | `TEXT`. Plain text only, displayed as text, so links are visible but no HTML is rendered |
+| `created_at` | Timestamp |
+
+**Indexes:** `(created_at)`. Written only by the demo mail driver (D13), emptied by the nightly reset, and listed on the guard test's allow-list of non-tenant tables. Outside demo mode it stays empty, and no route reads it.
 
 ---
 
@@ -433,16 +449,64 @@ If a step is forgotten, the `RESTRICT` constraints make the transaction fail, no
 
 ---
 
-## 7. Hosting compatibility
+## 7. PostgreSQL design notes
 
-**This schema doesn't change for free hosting (D7).** It requires real MySQL 8.4 behaviour, which is why MariaDB and other MySQL-compatible hosts were not accepted without testing.
+D12 proposes PostgreSQL 18 instead of MySQL. **This is a reviewed conversion, not a rename:** every rule from the MySQL design was checked against PostgreSQL, and nothing protecting tenants was removed.
 
-| Requirement | Why it matters | How it is checked on Aiven |
+### Evaluation summary
+
+| Question | Answer |
+|---|---|
+| Does PostgreSQL support the composite tenant foreign keys? | **Yes.** The referenced columns must form a primary key or unique constraint, and `(workspace_id, id)` already has one on each parent table |
+| How must the schema change? | See the next table. Six changes. The tenant model, tables and relationships are unchanged |
+| Do generated columns, indexes, constraints and locking need adjusting? | The generated column is replaced by a partial index. Foreign keys need explicit indexes. Locking works, with two coding rules. `CHECK` constraints are unchanged |
+| Does Laravel support it cleanly? | Yes, as a first-class database. Two index types need a short raw SQL statement in their migrations |
+| Does testing change? | Same approach, on PostgreSQL 18, plus tests for PostgreSQL-specific behaviour ([testing strategy](06-testing-strategy.md#postgresql-specific-tests)) |
+| How is it set up on Windows, and kept in step with the deployed database? | See [environment parity](02-system-architecture.md#environment-parity) |
+
+### What changes from the MySQL design
+
+| Area | MySQL design | PostgreSQL design | Why |
+|---|---|---|---|
+| Composite tenant foreign keys | Supported | **Unchanged** | Supported natively |
+| Indexes on foreign key columns | Created automatically | **Created explicitly**, checked by a guard test | PostgreSQL doesn't create them automatically |
+| One open invitation per email | Generated `pending_email` column with a unique index | **Partial unique index** with a `WHERE` clause | A partial index expresses the rule directly |
+| Case-insensitive email | Case-insensitive collation | Lowercased by the application, **plus a unique index on `lower(email)`** | PostgreSQL text comparison is case-sensitive |
+| Title search | `LIKE`, case-insensitive by default | `ILIKE` | Same reason |
+| Status and role values | `VARCHAR` | `VARCHAR` plus `CHECK` | The database rejects invalid values, matching the PHP enums |
+| JSON columns | `JSON` | `JSONB` | Binary format, can be indexed |
+| Timestamps | `TIMESTAMP` | `TIMESTAMPTZ` | Unambiguous moments in time |
+| ID columns | `BIGINT UNSIGNED` | `BIGINT` | PostgreSQL has no unsigned integers. The range is still enormous |
+| Failed migrations | Partly applied changes can remain | **Rolled back as a whole** | PostgreSQL schema changes are transactional |
+
+### Locking and transactions
+
+- **Row locks work the same way.** `SELECT ... FOR UPDATE` locks the selected rows until the transaction ends, which protects the last-Administrator rule and invitation acceptance.
+- **Coding rule 1:** PostgreSQL rejects `FOR UPDATE` combined with an aggregate such as `COUNT(*)`. The code locks the Administrator rows first, then counts them in PHP.
+- **Coding rule 2:** after any error inside a transaction, PostgreSQL rejects every further statement until the transaction is rolled back. So an expected unique violation (error code `23505`) is caught at the transaction boundary, or inside a savepoint. Laravel's nested transactions use savepoints. Where a conflict is normal, `INSERT ... ON CONFLICT DO NOTHING` avoids the error entirely.
+- **Isolation level:** PostgreSQL defaults to *Read Committed*, MySQL to *Repeatable Read*. The design never depends on the isolation level. Correctness comes from explicit locks and unique constraints, which behave the same under both.
+- **Deadlocks** (error code `40P01`) are retried by running the transaction with `attempts: 3`.
+- **Queue:** Laravel's database queue driver claims jobs with row locks. Tests confirm two workers never take the same job.
+
+### Laravel support
+
+| Feature | Laravel support | Approach |
 |---|---|---|
-| Composite foreign keys, `CHECK` and generated columns | Tenant integrity and invitation uniqueness | Phase 2 hosting validation runs the constraint tests against the host |
-| `SELECT ... FOR UPDATE` | Last-Administrator and invitation race protection | Same validation |
-| Primary key on every table | Aiven's default `sql_require_primary_key` setting requires it. All application tables comply. **Framework tables are verified by running migrations with the setting on**, and CI uses the same setting | Migrations in CI and on Aiven |
-| Size within the 1 GB free disk | Demo seed data stays small. The larger 20,000-task performance dataset runs locally only | Checked after seeding |
-| Under 76 connections | PHP-FPM workers and the queue worker stay well below this | Configuration review |
+| Composite foreign keys | The schema builder accepts arrays of columns. Not shown in the docs | Schema builder. Raw SQL fallback. Proven by constraint tests |
+| Partial and expression indexes | Not documented in the schema builder | One short `DB::statement` in the relevant migration |
+| `CHECK` constraints for status values | Not documented for PostgreSQL | Explicit `CHECK` through `DB::statement`, so the result is certain |
+| `timestampsTz`, `softDeletesTz`, `jsonb` | Documented | Schema builder |
+| TLS options | `sslmode` and `sslrootcert` passed to the driver, confirmed in Laravel's source | Configuration |
+| Queries | Eloquent and the query builder, unchanged | **No extra database abstraction layer.** Raw SQL appears only in migrations |
 
-Application tables gain no demo-specific columns. Demo accounts are identified through configuration and `users.email`.
+### Hosting compatibility
+
+| Requirement | Neon Free | Checked by |
+|---|---|---|
+| Composite foreign keys, partial and expression indexes, `CHECK`, row locks | Standard PostgreSQL 18. No extensions needed | Hosting validation check 3 |
+| Storage | 1 GB. Demo seed data stays small, and the 20,000-task performance dataset runs locally only | Size checked after seeding |
+| Connections | Direct endpoint. About three PHP-FPM workers, one queue worker, and short-lived GitHub Actions connections | Configuration review |
+| Permissions | No superuser. Migrations need only table-owner rights | Migrations on Neon |
+| TLS | `verify-full` with the system CA bundle | Hosting validation check 2 |
+
+**Aiven fallback differences:** a 20-connection limit and a private CA certificate. Neither changes the schema.
